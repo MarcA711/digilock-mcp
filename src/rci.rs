@@ -16,7 +16,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
     sync::Mutex,
-    time::timeout,
+    time::{Instant, timeout_at},
 };
 
 /// One client owns at most one TCP connection per port on its configured host.
@@ -54,31 +54,78 @@ impl RciClient {
     }
 
     pub async fn execute(&self, port: u16, command: &str) -> Result<RciResponse> {
+        self.execute_transaction(
+            port,
+            command,
+            None::<(&str, fn(&RciResponse) -> Result<()>)>,
+        )
+        .await
+    }
+
+    /// Queries fresh state, checks it, and executes `command` without releasing
+    /// the per-port session lock. Any query or check error prevents the command.
+    /// Both commands are validated before connecting; the entire operation uses
+    /// one timeout, including queueing and the synchronous check. The check cannot
+    /// be preempted, but if it overruns the deadline the command is not sent.
+    /// Atomicity is relative to requests sharing this client and port only.
+    pub async fn execute_checked<F>(
+        &self,
+        port: u16,
+        query: &str,
+        command: &str,
+        check: F,
+    ) -> Result<RciResponse>
+    where
+        F: FnOnce(&RciResponse) -> Result<()>,
+    {
+        self.execute_transaction(port, command, Some((query, check)))
+            .await
+    }
+
+    async fn execute_transaction<F>(
+        &self,
+        port: u16,
+        command: &str,
+        checked: Option<(&str, F)>,
+    ) -> Result<RciResponse>
+    where
+        F: FnOnce(&RciResponse) -> Result<()>,
+    {
         if port == 0 {
             bail!("RCI port must not be zero");
         }
-        if command.trim().is_empty() {
-            bail!("RCI command must not be empty or whitespace-only");
+        validate_command(command)?;
+        if let Some((query, _)) = &checked {
+            validate_command(query)?;
         }
-        if command.chars().any(char::is_control) {
-            bail!(
-                "RCI command must not contain control characters (including CR, LF, NUL, or DEL)"
-            );
-        }
-
-        timeout(self.timeout, self.execute_inner(port, command))
-            .await
-            .map_err(|_| {
-                anyhow!(
-                    "RCI transaction on {}:{} timed out after {:?}; it was not replayed",
-                    self.host,
-                    port,
-                    self.timeout
-                )
-            })?
+        let deadline = Instant::now() + self.timeout;
+        timeout_at(
+            deadline,
+            self.execute_inner(port, command, checked, deadline),
+        )
+        .await
+        .map_err(|_| self.timeout_error(port))?
     }
 
-    async fn execute_inner(&self, port: u16, command: &str) -> Result<RciResponse> {
+    fn timeout_error(&self, port: u16) -> anyhow::Error {
+        anyhow!(
+            "RCI transaction on {}:{} timed out after {:?}; it was not replayed",
+            self.host,
+            port,
+            self.timeout
+        )
+    }
+
+    async fn execute_inner<F>(
+        &self,
+        port: u16,
+        command: &str,
+        checked: Option<(&str, F)>,
+        deadline: Instant,
+    ) -> Result<RciResponse>
+    where
+        F: FnOnce(&RciResponse) -> Result<()>,
+    {
         let slot = {
             let mut sessions = self.sessions.lock().await;
             sessions
@@ -104,37 +151,27 @@ impl RciClient {
             }
         };
 
-        stream
-            .write_all(command.as_bytes())
-            .await
-            .context("writing RCI command")?;
-        stream
-            .write_all(b"\r\n")
-            .await
-            .context("writing RCI command terminator")?;
-        let frame = read_frame(&mut stream, self.max_response_bytes)
-            .await
-            .context("reading RCI reply")?;
-        let response = strip_reply(&frame, command).to_owned();
+        if let Some((query, check)) = checked {
+            let response = exchange(&mut stream, query, self.max_response_bytes).await?;
+            let result = check_device_error(&response).and_then(|()| check(&response));
+            // Tokio timeouts cannot interrupt a synchronous closure. Explicitly
+            // reject an overrun before any write, even if the socket is ready.
+            if Instant::now() >= deadline {
+                return Err(self.timeout_error(port));
+            }
+            if let Err(error) = result {
+                // Device/policy errors do not leave any unread reply bytes.
+                *guard = Some(stream);
+                return Err(error);
+            }
+        }
 
+        let response = exchange(&mut stream, command, self.max_response_bytes).await?;
         // A device error is still a correctly framed transaction. Preserve the
         // connection before returning it as an error to the caller.
         *guard = Some(stream);
-        if response.lines().any(|line| line.starts_with("%% Error: ")) {
-            bail!("RCI device error: {response}");
-        }
-
-        let value = command.strip_suffix('?').and_then(|name| {
-            response
-                .strip_prefix(name)
-                .and_then(|rest| rest.strip_prefix('='))
-                .map(str::to_owned)
-        });
-        Ok(RciResponse {
-            command: command.to_owned(),
-            response,
-            value,
-        })
+        check_device_error(&response)?;
+        Ok(response)
     }
 
     /// Waits for any transaction on this port, then closes its session. Returns
@@ -148,6 +185,53 @@ impl RciClient {
         // Slots intentionally remain in the map: removing them could create two
         // locks/connections for the same port while an execute is already queued.
     }
+}
+
+fn validate_command(command: &str) -> Result<()> {
+    if command.trim().is_empty() {
+        bail!("RCI command must not be empty or whitespace-only");
+    }
+    if command.chars().any(char::is_control) {
+        bail!("RCI command must not contain control characters (including CR, LF, NUL, or DEL)");
+    }
+    Ok(())
+}
+
+async fn exchange(stream: &mut TcpStream, command: &str, limit: usize) -> Result<RciResponse> {
+    stream
+        .write_all(command.as_bytes())
+        .await
+        .context("writing RCI command")?;
+    stream
+        .write_all(b"\r\n")
+        .await
+        .context("writing RCI command terminator")?;
+    let frame = read_frame(stream, limit)
+        .await
+        .context("reading RCI reply")?;
+    let response = strip_reply(&frame, command).to_owned();
+    let value = command.strip_suffix('?').and_then(|name| {
+        response
+            .strip_prefix(name)
+            .and_then(|rest| rest.strip_prefix('='))
+            .map(str::to_owned)
+    });
+    Ok(RciResponse {
+        command: command.to_owned(),
+        response,
+        value,
+    })
+}
+
+fn check_device_error(response: &RciResponse) -> Result<()> {
+    if response
+        .response
+        .lines()
+        .any(|line| line.starts_with("%% Error: "))
+    {
+        bail!("RCI device error: {}", response.response);
+    }
+    Ok(())
 }
 
 async fn read_frame(stream: &mut TcpStream, limit: usize) -> Result<String> {
@@ -200,7 +284,7 @@ mod tests {
         io::{AsyncBufReadExt, BufReader},
         net::{TcpListener, tcp::OwnedReadHalf},
         sync::{Barrier, oneshot},
-        time::sleep,
+        time::{sleep, timeout},
     };
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(3);
@@ -733,6 +817,477 @@ mod tests {
         assert!(client.sessions.lock().await.is_empty());
         assert!(!client.disconnect(port).await);
         assert!(!client.disconnect(0).await);
+    }
+
+    #[tokio::test]
+    async fn checked_query_is_fresh_and_returns_the_write_reply() {
+        let (listener, port) = listener().await;
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read, mut write) = stream.into_split();
+            let mut read = BufReader::new(read);
+            write.write_all(b"> ").await.unwrap();
+            command(&mut read, "offset?").await;
+            write.write_all(b"offset=0\r\n> ").await.unwrap();
+            command(&mut read, "offset?").await;
+            write.write_all(b"offset?\r\noffset=4\r\n>").await.unwrap();
+            sleep(Duration::from_millis(10)).await;
+            write.write_all(b" ").await.unwrap();
+            command(&mut read, "amplitude=6").await;
+            write
+                .write_all(b"amplitude=6\r\naccepted\r\n> ")
+                .await
+                .unwrap();
+            closed(&mut read).await;
+        });
+        let client = client(TEST_TIMEOUT, 1024);
+        assert_eq!(
+            client
+                .execute(port, "offset?")
+                .await
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("0")
+        );
+        // Capturing a non-Send value also ensures the API imposes no unnecessary
+        // Send/'static bounds on the synchronous, one-shot check.
+        let seen = std::rc::Rc::new(std::cell::Cell::new(false));
+        let checked = seen.clone();
+        let expected = String::from("4");
+        let reply = client
+            .execute_checked(port, "offset?", "amplitude=6", move |reply| {
+                assert_eq!(reply.command, "offset?");
+                assert_eq!(reply.response, "offset=4");
+                assert_eq!(reply.value, Some(expected));
+                checked.set(true);
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert!(seen.get());
+        assert_eq!(reply.command, "amplitude=6");
+        assert_eq!(reply.response, "accepted");
+        assert_eq!(reply.value, None);
+        assert!(client.disconnect(port).await);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn checked_denial_and_missing_value_prevent_write_and_retain_session() {
+        let (listener, port) = listener().await;
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read, mut write) = stream.into_split();
+            let mut read = BufReader::new(read);
+            write.write_all(b"> ").await.unwrap();
+            for reply in ["offset=9\r\n> ", "unrelated=0\r\n> "] {
+                command(&mut read, "offset?").await;
+                write.write_all(reply.as_bytes()).await.unwrap();
+            }
+            // Any denied write would be observed here instead of this query.
+            command(&mut read, "next?").await;
+            write.write_all(b"next=ok\r\n> ").await.unwrap();
+            closed(&mut read).await;
+        });
+        let client = client(TEST_TIMEOUT, 1024);
+        for expected in ["unsafe offset", "missing offset"] {
+            let error = client
+                .execute_checked(port, "offset?", "amplitude=6", |reply| {
+                    let value = reply.value.as_deref().context("missing offset")?;
+                    if value != "0" {
+                        bail!("unsafe offset");
+                    }
+                    Ok(())
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(error.to_string(), expected);
+        }
+        assert_eq!(
+            client
+                .execute(port, "next?")
+                .await
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("ok")
+        );
+        assert!(client.disconnect(port).await);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn checked_query_errors_prevent_check_and_write() {
+        for (payload, expected, retain) in [
+            (
+                &b"%% Error: bad parameter-offset\r\n> "[..],
+                "device error",
+                true,
+            ),
+            (&b"offset=\xff\r\n> "[..], "invalid UTF-8", false),
+            (&b"offset=0\r\n> trailing"[..], "framing error", false),
+            (&b"offset=0\r\n>"[..], "EOF", false),
+        ] {
+            let (listener, port) = listener().await;
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let (read, mut write) = stream.into_split();
+                let mut read = BufReader::new(read);
+                write.write_all(b"> ").await.unwrap();
+                command(&mut read, "offset?").await;
+                write.write_all(payload).await.unwrap();
+                if retain {
+                    command(&mut read, "next?").await;
+                    write.write_all(b"next=ok\r\n> ").await.unwrap();
+                } else {
+                    write.shutdown().await.unwrap();
+                }
+                closed(&mut read).await;
+            });
+            let client = client(TEST_TIMEOUT, 1024);
+            let error = client
+                .execute_checked(port, "offset?", "amplitude=6", |_| {
+                    panic!("query errors must not invoke the check")
+                })
+                .await
+                .unwrap_err();
+            assert!(format!("{error:#}").contains(expected), "{error:#}");
+            if retain {
+                assert_eq!(
+                    client
+                        .execute(port, "next?")
+                        .await
+                        .unwrap()
+                        .value
+                        .as_deref(),
+                    Some("ok")
+                );
+            }
+            assert_eq!(client.disconnect(port).await, retain);
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_checked_operations_prevent_an_unsafe_final_state() {
+        let (listener, port) = listener().await;
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read, mut write) = stream.into_split();
+            let mut read = BufReader::new(read);
+            write.write_all(b"> ").await.unwrap();
+            let mut first = String::new();
+            timeout(TEST_TIMEOUT, read.read_line(&mut first))
+                .await
+                .unwrap()
+                .unwrap();
+            let (queried, changed) = match first.as_str() {
+                "offset?\r\n" => ("offset", "amplitude"),
+                "amplitude?\r\n" => ("amplitude", "offset"),
+                _ => panic!("unexpected query: {first:?}"),
+            };
+            // Both operations are running, but the second must stay queued.
+            assert!(
+                timeout(Duration::from_millis(30), read.fill_buf())
+                    .await
+                    .is_err()
+            );
+            write
+                .write_all(format!("{queried}=0\r\n> ").as_bytes())
+                .await
+                .unwrap();
+            command(&mut read, &format!("{changed}=6")).await;
+            write.write_all(b"> ").await.unwrap();
+            // The second check sees the first write, not the original zero.
+            command(&mut read, &format!("{changed}?")).await;
+            write
+                .write_all(format!("{changed}=6\r\n> ").as_bytes())
+                .await
+                .unwrap();
+            command(&mut read, "state?").await;
+            write.write_all(b"state=6\r\n> ").await.unwrap();
+            closed(&mut read).await;
+        });
+        let client = client(TEST_TIMEOUT, 1024);
+        let check = |reply: &RciResponse| -> Result<()> {
+            let other: u32 = reply.value.as_deref().context("missing state")?.parse()?;
+            if other + 6 > 10 {
+                bail!("unsafe combined output");
+            }
+            Ok(())
+        };
+        let (amplitude, offset) = tokio::join!(
+            client.execute_checked(port, "offset?", "amplitude=6", check),
+            client.execute_checked(port, "amplitude?", "offset=6", check),
+        );
+        assert_eq!(
+            usize::from(amplitude.is_ok()) + usize::from(offset.is_ok()),
+            1
+        );
+        let denied = amplitude.err().or_else(|| offset.err()).unwrap();
+        assert_eq!(denied.to_string(), "unsafe combined output");
+        assert_eq!(
+            client
+                .execute(port, "state?")
+                .await
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("6")
+        );
+        assert!(client.disconnect(port).await);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn checked_timeout_and_cancellation_never_send_a_later_write() {
+        for cancel in [false, true] {
+            let (listener, port) = listener().await;
+            let (received_tx, received_rx) = oneshot::channel();
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let (read, mut write) = stream.into_split();
+                let mut read = BufReader::new(read);
+                write.write_all(b"> ").await.unwrap();
+                command(&mut read, "offset?").await;
+                write.write_all(b"offset=0\r\n>").await.unwrap();
+                received_tx.send(()).unwrap();
+                // Cancellation may close with RST if reply bytes are unread.
+                // Neither EOF nor RST may be preceded by any command bytes.
+                let mut byte = [0];
+                let result = timeout(TEST_TIMEOUT, read.read(&mut byte)).await.unwrap();
+                assert!(
+                    matches!(result, Ok(0))
+                        || matches!(result, Err(ref error) if error.kind() == std::io::ErrorKind::ConnectionReset),
+                    "unexpected data after cancellation/timeout: {result:?}"
+                );
+                drop(write);
+                let (stream, _) = listener.accept().await.unwrap();
+                let (read, mut write) = stream.into_split();
+                let mut read = BufReader::new(read);
+                write.write_all(b"> ").await.unwrap();
+                command(&mut read, "next?").await;
+                write.write_all(b"next=fresh\r\n> ").await.unwrap();
+                closed(&mut read).await;
+            });
+            let duration = if cancel {
+                TEST_TIMEOUT
+            } else {
+                Duration::from_millis(100)
+            };
+            let client = Arc::new(client(duration, 1024));
+            let request_client = client.clone();
+            let request = tokio::spawn(async move {
+                request_client
+                    .execute_checked(port, "offset?", "amplitude=6", |_| {
+                        panic!("incomplete query must not invoke the check")
+                    })
+                    .await
+            });
+            timeout(TEST_TIMEOUT, received_rx).await.unwrap().unwrap();
+            if cancel {
+                request.abort();
+                assert!(request.await.unwrap_err().is_cancelled());
+            } else {
+                assert!(
+                    request
+                        .await
+                        .unwrap()
+                        .unwrap_err()
+                        .to_string()
+                        .contains("timed out")
+                );
+            }
+            assert!(!client.disconnect(port).await);
+            assert_eq!(
+                client
+                    .execute(port, "next?")
+                    .await
+                    .unwrap()
+                    .value
+                    .as_deref(),
+                Some("fresh")
+            );
+            assert!(client.disconnect(port).await);
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn checked_one_deadline_covers_welcome_query_and_write_reply() {
+        let (listener, port) = listener().await;
+        let (release_tx, release_rx) = oneshot::channel();
+        let (received_tx, received_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read, mut write) = stream.into_split();
+            let mut read = BufReader::new(read);
+            release_rx.await.unwrap();
+            write.write_all(b"> ").await.unwrap();
+            command(&mut read, "offset?").await;
+            write.write_all(b"offset=0\r\n> ").await.unwrap();
+            command(&mut read, "amplitude=6").await;
+            received_tx.send(()).unwrap();
+            closed(&mut read).await;
+        });
+        let client = client(Duration::from_millis(200), 1024);
+        let request = client.execute_checked(port, "offset?", "amplitude=6", |_| Ok(()));
+        tokio::pin!(request);
+        tokio::select! {
+            result = &mut request => panic!("request finished early: {result:?}"),
+            _ = sleep(Duration::from_millis(120)) => {},
+        }
+        release_tx.send(()).unwrap();
+        tokio::select! {
+            result = &mut request => panic!("request finished before write: {result:?}"),
+            result = received_rx => result.unwrap(),
+        }
+        assert!(
+            timeout(Duration::from_millis(130), &mut request)
+                .await
+                .expect("checked transaction deadline was reset between phases")
+                .unwrap_err()
+                .to_string()
+                .contains("timed out")
+        );
+        assert!(!client.disconnect(port).await);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn checked_queue_timeout_preserves_active_session_and_never_sends() {
+        let (listener, port) = listener().await;
+        let client = client(Duration::from_millis(60), 1024);
+        let slot = Arc::new(Mutex::new(None));
+        client.sessions.lock().await.insert(port, slot.clone());
+        let mut guard = slot.lock().await;
+        let connected = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let (mut peer, _) = listener.accept().await.unwrap();
+        *guard = Some(connected);
+        let error = client
+            .execute_checked(port, "offset?", "amplitude=6", |_| {
+                panic!("a queued timeout must not invoke the check")
+            })
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("timed out"));
+        assert!(guard.is_some());
+        drop(guard);
+        // Releasing the queue after expiry must not send even the query.
+        let mut byte = [0];
+        assert!(
+            timeout(Duration::from_millis(20), peer.read(&mut byte))
+                .await
+                .is_err()
+        );
+        assert!(client.disconnect(port).await);
+        assert_eq!(peer.read(&mut byte).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn disconnect_waits_for_the_entire_checked_transaction() {
+        let (listener, port) = listener().await;
+        let (received_tx, received_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read, mut write) = stream.into_split();
+            let mut read = BufReader::new(read);
+            write.write_all(b"> ").await.unwrap();
+            command(&mut read, "offset?").await;
+            received_tx.send(()).unwrap();
+            release_rx.await.unwrap();
+            write.write_all(b"offset=0\r\n> ").await.unwrap();
+            command(&mut read, "amplitude=6").await;
+            write.write_all(b"> ").await.unwrap();
+            closed(&mut read).await;
+        });
+        let client = Arc::new(client(TEST_TIMEOUT, 1024));
+        let request_client = client.clone();
+        let request = tokio::spawn(async move {
+            request_client
+                .execute_checked(port, "offset?", "amplitude=6", |_| Ok(()))
+                .await
+        });
+        timeout(TEST_TIMEOUT, received_rx).await.unwrap().unwrap();
+        let disconnect = client.disconnect(port);
+        tokio::pin!(disconnect);
+        assert!(
+            timeout(Duration::from_millis(20), &mut disconnect)
+                .await
+                .is_err()
+        );
+        release_tx.send(()).unwrap();
+        request.await.unwrap().unwrap();
+        assert!(timeout(TEST_TIMEOUT, &mut disconnect).await.unwrap());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn checked_sync_check_overrun_prevents_write() {
+        let (listener, port) = listener().await;
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read, mut write) = stream.into_split();
+            let mut read = BufReader::new(read);
+            write.write_all(b"> ").await.unwrap();
+            command(&mut read, "offset?").await;
+            write.write_all(b"offset=0\r\n> ").await.unwrap();
+            closed(&mut read).await;
+        });
+        let client = client(Duration::from_millis(100), 1024);
+        let error = client
+            .execute_checked(port, "offset?", "amplitude=6", |_| {
+                std::thread::sleep(Duration::from_millis(150));
+                Ok(())
+            })
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("timed out"));
+        assert!(!client.disconnect(port).await);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn checked_validates_both_commands_before_connect() {
+        let (listener, port) = listener().await;
+        let client = client(TEST_TIMEOUT, 1024);
+        for invalid in [
+            "",
+            "   ",
+            "offset?\n",
+            "x\r",
+            "x\0",
+            "x\t",
+            "x\u{7f}",
+            "x\u{85}",
+        ] {
+            for (query, command) in [(invalid, "amplitude=6"), ("offset?", invalid)] {
+                assert!(
+                    client
+                        .execute_checked(port, query, command, |_| {
+                            panic!("invalid commands must not invoke the check")
+                        })
+                        .await
+                        .is_err()
+                );
+            }
+        }
+        assert!(
+            client
+                .execute_checked(0, "offset?", "amplitude=6", |_| Ok(()))
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("port")
+        );
+        assert!(
+            timeout(Duration::from_millis(20), listener.accept())
+                .await
+                .is_err()
+        );
+        assert!(client.sessions.lock().await.is_empty());
     }
 
     #[test]

@@ -4,13 +4,16 @@
     "commands": [
       { "target": "dui", "command": "pid1:proportional" },
       { "target": "dui", "command": "pid1:lock:enable" },
-      { "target": "dui", "command": "pid1:input" }
+      { "target": "dui", "command": "pid1:input" },
+      { "target": "dui", "command": "offset:value" },
+      { "target": "dui", "command": "scan:amplitude" }
     ],
     "limits": [
       { "target": "dui", "command": "pid1:proportional", "min": 0, "max": 1 },
       { "target": "dui", "command": "pid1:lock:enable", "allowed_values": ["false"] },
       { "target": "dui", "command": "pid1:input", "allowed_values": ["main in"] }
-    ]
+    ],
+    "scan_range": { "min": -1, "max": 1 }
   },
   "initial_values": []
 }

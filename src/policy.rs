@@ -15,6 +15,8 @@ pub struct WritePolicy {
     pub commands: Vec<CommandKey>,
     #[serde(default)]
     pub limits: Vec<ValueLimit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan_range: Option<ScanRange>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -41,6 +43,90 @@ pub struct ValueLimit {
     pub allowed_values: Option<Vec<String>>,
 }
 
+/// Inclusive bounds for the scan envelope, using offset +/- peak-to-peak amplitude / 2.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScanRange {
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+}
+
+impl ScanRange {
+    pub fn validate(&self) -> Result<()> {
+        if self.min.is_none() && self.max.is_none() {
+            bail!("scan_range must contain min or max");
+        }
+        if [self.min, self.max]
+            .into_iter()
+            .flatten()
+            .any(|bound| !bound.is_finite())
+        {
+            bail!("scan_range bounds must be finite");
+        }
+        if let (Some(min), Some(max)) = (self.min, self.max)
+            && min > max
+        {
+            bail!("scan_range minimum exceeds maximum");
+        }
+        Ok(())
+    }
+
+    /// The canonical name to query on the same DUI before this control is set.
+    pub fn counterpart(name: &str) -> Option<&'static str> {
+        if same_command(name, "offset:value") {
+            Some("scan:amplitude")
+        } else if same_command(name, "scan:amplitude") {
+            Some("offset:value")
+        } else {
+            None
+        }
+    }
+
+    pub fn validate_update(name: &str, value: &str) -> Result<()> {
+        let number =
+            parse_number(value).with_context(|| format!("invalid scan_range value for {name}"))?;
+        if same_command(name, "scan:amplitude") && number < 0.0 {
+            bail!("scan_range requires a nonnegative scan amplitude");
+        }
+        Ok(())
+    }
+
+    /// Check the proposed value against a freshly queried counterpart, not state
+    /// remembered from an earlier successful write or startup configuration.
+    pub fn check_update(&self, name: &str, proposed: &str, current: &str) -> Result<()> {
+        let proposed = parse_number(proposed).context("invalid proposed scan_range value")?;
+        let current =
+            parse_number(current).context("invalid current scan_range counterpart value")?;
+        let (offset, amplitude) = if same_command(name, "offset:value") {
+            (proposed, current)
+        } else if same_command(name, "scan:amplitude") {
+            (current, proposed)
+        } else {
+            bail!("{name} is not a scan_range control");
+        };
+        if amplitude < 0.0 {
+            bail!("scan_range requires a nonnegative scan amplitude");
+        }
+        let half_amplitude = amplitude / 2.0;
+        let lower = offset - half_amplitude;
+        let upper = offset + half_amplitude;
+        if !lower.is_finite() || !upper.is_finite() {
+            bail!("computed scan_range must be finite");
+        }
+        if let Some(min) = self.min
+            && lower < min
+        {
+            bail!("scan_range [{lower}, {upper}] is below minimum {min}");
+        }
+        if let Some(max) = self.max
+            && upper > max
+        {
+            bail!("scan_range [{lower}, {upper}] exceeds maximum {max}");
+        }
+        Ok(())
+    }
+}
+
 /// Compare command spellings ignoring ASCII case and ASCII spaces only.
 ///
 /// This deliberately treats spaced and unspaced names as aliases so a spelling
@@ -58,6 +144,9 @@ pub fn same_command(a: &str, b: &str) -> bool {
 
 impl WritePolicy {
     pub fn validate(&self, catalog: &[catalog::Command]) -> Result<()> {
+        if let Some(range) = &self.scan_range {
+            range.validate()?;
+        }
         for (index, key) in self.commands.iter().enumerate() {
             catalog::validate_name(&key.command)
                 .with_context(|| format!("invalid policy command {:?}", key.command))?;
@@ -149,6 +238,12 @@ impl WritePolicy {
                 }
             }
         }
+        if self.scan_range.is_some()
+            && target == Target::Dui
+            && ScanRange::counterpart(name).is_some()
+        {
+            ScanRange::validate_update(name, value)?;
+        }
         Ok(())
     }
 }
@@ -203,11 +298,115 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn scan_range_validates_optional_bounds_and_rejects_invalid_configuration() {
+        for range in [
+            ScanRange {
+                min: Some(-1.0),
+                max: None,
+            },
+            ScanRange {
+                min: None,
+                max: Some(1.0),
+            },
+            ScanRange {
+                min: Some(0.0),
+                max: Some(0.0),
+            },
+        ] {
+            range.validate().unwrap();
+        }
+        for range in [
+            ScanRange {
+                min: None,
+                max: None,
+            },
+            ScanRange {
+                min: Some(1.0),
+                max: Some(-1.0),
+            },
+            ScanRange {
+                min: Some(f64::NAN),
+                max: None,
+            },
+            ScanRange {
+                min: None,
+                max: Some(f64::INFINITY),
+            },
+        ] {
+            assert!(range.validate().is_err());
+        }
+        assert!(serde_json::from_value::<ScanRange>(json!({"max":1, "maximum":2})).is_err());
+    }
+
+    #[test]
+    fn scan_range_checks_peak_to_peak_envelope_for_both_controls_and_aliases() {
+        let range = ScanRange {
+            min: Some(-2.0),
+            max: Some(6.0),
+        };
+        for name in ["offset:value", "OFFSET: VALUE"] {
+            range.check_update(name, "2e0", "8,0").unwrap();
+            range.check_update(name, "0", "4").unwrap();
+            range.check_update(name, "4", "4").unwrap();
+            assert!(range.check_update(name, "1.99", "8").is_err());
+            assert!(range.check_update(name, "2.01", "8").is_err());
+        }
+        for name in ["scan:amplitude", "SCAN: AMPLITUDE"] {
+            range.check_update(name, "8,0", "2e0").unwrap();
+            range.check_update(name, "4", "2").unwrap();
+            assert!(range.check_update(name, "8.01", "2").is_err());
+        }
+        let point = ScanRange {
+            min: Some(2.0),
+            max: Some(2.0),
+        };
+        point.check_update("offset:value", "2", "0").unwrap();
+        assert!(point.check_update("scan:amplitude", "0.01", "2").is_err());
+    }
+
+    #[test]
+    fn scan_range_rejects_invalid_current_or_proposed_values_and_overflow() {
+        let range = ScanRange {
+            min: None,
+            max: Some(f64::MAX),
+        };
+        for invalid in ["NaN", "inf", "1e999", "1,2.3", "1 V", " 1"] {
+            assert!(range.check_update("offset:value", invalid, "0").is_err());
+            assert!(range.check_update("offset:value", "0", invalid).is_err());
+        }
+        assert!(range.check_update("offset:value", "0", "-1").is_err());
+        assert!(range.check_update("scan:amplitude", "-1", "0").is_err());
+        assert!(
+            range
+                .check_update("scan:amplitude", "1e308", "1.5e308")
+                .is_err()
+        );
+        assert!(range.check_update("unrelated", "0", "0").is_err());
+    }
+
+    #[test]
+    fn scan_range_static_checks_are_dui_only_and_do_not_grant_write_permission() {
+        let mut policy = policy(Mode::Denylist);
+        policy.scan_range = Some(ScanRange {
+            min: Some(-1.0),
+            max: Some(1.0),
+        });
+        assert!(policy.check(Target::Dui, "offset:value", "NaN").is_err());
+        assert!(policy.check(Target::Dui, "SCAN: AMPLITUDE", "-1").is_err());
+        policy.check(Target::Dui, "offset:value", "-0.5").unwrap();
+        policy.check(Target::Dms, "scan:amplitude", "-1").unwrap();
+        policy.check(Target::Dui, "other", "not numeric").unwrap();
+        policy.mode = Mode::Allowlist;
+        assert!(policy.check(Target::Dui, "scan:amplitude", "0").is_err());
+    }
+
     fn policy(mode: Mode) -> WritePolicy {
         WritePolicy {
             mode,
             commands: vec![],
             limits: vec![],
+            scan_range: None,
         }
     }
 

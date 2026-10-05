@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use crate::{
     catalog::{self, Command, Target},
     config::OperatorConfig,
-    policy::same_command,
+    policy::{ScanRange, same_command},
     rci::RciClient,
 };
 
@@ -270,7 +270,31 @@ impl DigiLockServer {
 
     async fn execute(&self, endpoint: &Endpoint, command: &str) -> Result<Value> {
         let port = self.port(endpoint)?;
-        let reply = self.client.execute(port, command).await?;
+        let scan_check = self
+            .config
+            .operator
+            .as_ref()
+            .and_then(|operator| operator.write_policy.scan_range.as_ref())
+            .filter(|_| endpoint.target == Target::Dui)
+            .and_then(|range| {
+                let (name, value) = command.split_once('=')?;
+                let counterpart = ScanRange::counterpart(name)?;
+                Some((range, name, value, counterpart))
+            });
+        let reply = if let Some((range, name, value, counterpart)) = scan_check {
+            let query = format!("{counterpart}?");
+            self.client
+                .execute_checked(port, &query, command, |reply| {
+                    let current = reply.value.as_deref().with_context(|| {
+                        format!("scan_range check requires a value from {query}")
+                    })?;
+                    range.check_update(name, value, current)
+                })
+                .await
+                .context("checking scan_range and applying write")?
+        } else {
+            self.client.execute(port, command).await?
+        };
         Ok(
             json!({ "target": endpoint.target, "host": self.config.host, "port": port,
             "command": reply.command, "response": reply.response, "value": reply.value }),

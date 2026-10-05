@@ -722,6 +722,484 @@ async fn config_denylist_and_limits_cannot_be_bypassed_by_raw_aliases_or_ports()
 }
 
 #[tokio::test]
+async fn scan_range_setters_use_fresh_counterparts_and_inclusive_peak_to_peak_amplitude() {
+    let (dui, port) = listener().await;
+    let config = ConfigFile::new(json!({
+        "write_policy": {"mode": "denylist", "scan_range": {"min": -2, "max": 6}}
+    }));
+    let fake = tokio::spawn(async move {
+        scripted_rci(
+            dui,
+            &[
+                // Peak-to-peak amplitude 8 at offset 2 touches both bounds: [-2, 6].
+                ("scan:amplitude?", "scan:amplitude=8\r\n> "),
+                ("offset:value=2", "> "),
+                ("offset:value?", "offset:value=2\r\n> "),
+                ("scan:amplitude=8", "> "),
+                // Proposed values just outside either bound must not be written.
+                ("scan:amplitude?", "scan:amplitude=8\r\n> "),
+                ("scan:amplitude?", "scan:amplitude=8\r\n> "),
+                ("offset:value?", "offset:value=2\r\n> "),
+                // Simulate changes made outside the wrapper, without intervening writes.
+                ("scan:amplitude?", "scan:amplitude=8.02\r\n> "),
+                ("scan:amplitude?", "scan:amplitude=7.98\r\n> "),
+                ("offset:value=2", "> "),
+                ("offset:value?", "offset:value=2.01\r\n> "),
+                ("offset:value?", "offset:value=1.99\r\n> "),
+                ("offset:value?", "offset:value=2\r\n> "),
+                ("scan:amplitude=8", "> "),
+            ],
+        )
+        .await;
+    });
+    let mut args = config.args().to_vec();
+    args.extend([
+        "--allow-writes".into(),
+        "--dui-port".into(),
+        port.to_string(),
+    ]);
+    let mut mcp = Mcp::start(&args).await;
+    for (command, value, denied) in [
+        ("offset:value", "2", false),
+        ("scan:amplitude", "8", false),
+        ("offset:value", "2.01", true),
+        ("offset:value", "1.99", true),
+        ("scan:amplitude", "8.02", true),
+        ("offset:value", "2", true),
+        ("offset:value", "2", false),
+        ("scan:amplitude", "8", true),
+        ("scan:amplitude", "8", true),
+        ("scan:amplitude", "8", false),
+    ] {
+        let result = mcp
+            .call(
+                "digilock_set",
+                json!({"target": "dui", "command": command, "value": value}),
+            )
+            .await;
+        assert_eq!(result["isError"], denied, "{command}={value}: {result}");
+        if !denied {
+            assert_eq!(
+                result["structuredContent"]["command"],
+                format!("{command}={value}")
+            );
+            assert_eq!(result["structuredContent"]["response"], "");
+            assert_eq!(result["structuredContent"]["port"], port);
+        }
+    }
+    mcp.stop().await;
+    timeout(DEADLINE, fake).await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn scan_range_raw_aliases_are_guarded_on_each_actual_dui_endpoint_only() {
+    let (dms, dms_port) = listener().await;
+    let (dui, port) = listener().await;
+    let (other_dui, other_port) = listener().await;
+    let config = ConfigFile::new(json!({
+        "write_policy": {"mode": "denylist", "scan_range": {"min": -2, "max": 6}}
+    }));
+    let dms_fake = tokio::spawn(async move {
+        // The same spelling on DMS is not a protected DUI control.
+        scripted_rci(dms, &[("SCAN: AMPLITUDE=-1", "> ")]).await;
+    });
+    let fake = tokio::spawn(async move {
+        scripted_rci(
+            dui,
+            &[
+                ("scan:amplitude?", "scan:amplitude=8\r\n> "),
+                ("OFFSET: VALUE=2", "> "),
+                ("offset:value?", "offset:value=99\r\n> "),
+                ("pid1:proportional=0.25", "> "),
+            ],
+        )
+        .await;
+    });
+    let other_fake = tokio::spawn(async move {
+        scripted_rci(
+            other_dui,
+            &[
+                ("scan:amplitude?", "scan:amplitude=10\r\n> "),
+                ("scan:amplitude?", "scan:amplitude=8\r\n> "),
+                ("oFfSeT: vAlUe=2e0", "> "),
+                ("offset:value?", "offset:value=2\r\n> "),
+                ("ScAn: AmPlItUdE=8,0", "> "),
+                ("offset:value?", "offset:value=3\r\n> "),
+            ],
+        )
+        .await;
+    });
+    let mut args = config.args().to_vec();
+    args.extend([
+        "--allow-writes".into(),
+        "--dms-port".into(),
+        dms_port.to_string(),
+        "--dui-port".into(),
+        port.to_string(),
+    ]);
+    let mut mcp = Mcp::start(&args).await;
+    for (arguments, denied) in [
+        (
+            json!({"target": "dms", "command": "SCAN: AMPLITUDE=-1"}),
+            false,
+        ),
+        (
+            json!({"target": "dui", "command": "OFFSET: VALUE=2"}),
+            false,
+        ),
+        (json!({"target": "dui", "command": "offset:value?"}), false),
+        (
+            json!({"target": "dui", "command": "pid1:proportional=0.25"}),
+            false,
+        ),
+        (
+            json!({"target": "dui", "port": other_port, "command": "oFfSeT: vAlUe=2e0"}),
+            true,
+        ),
+        (
+            json!({"target": "dui", "port": other_port, "command": "oFfSeT: vAlUe=2e0"}),
+            false,
+        ),
+        (
+            json!({"target": "dui", "port": other_port, "command": "ScAn: AmPlItUdE=8,0"}),
+            false,
+        ),
+        (
+            json!({"target": "dui", "port": other_port, "command": "ScAn: AmPlItUdE=8,0"}),
+            true,
+        ),
+    ] {
+        let result = mcp.call("digilock_raw", arguments.clone()).await;
+        assert_eq!(result["isError"], denied, "{arguments}: {result}");
+        if !denied {
+            let expected_port = if arguments["target"] == "dms" {
+                dms_port
+            } else {
+                arguments["port"].as_u64().map_or(port, |port| port as u16)
+            };
+            assert_eq!(result["structuredContent"]["port"], expected_port);
+            assert_eq!(result["structuredContent"]["command"], arguments["command"]);
+        }
+    }
+    mcp.stop().await;
+    for task in [dms_fake, fake, other_fake] {
+        timeout(DEADLINE, task).await.unwrap().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn scan_range_optional_bounds_and_absent_default_preserve_expected_behavior() {
+    for (range, offset, amplitude, denied) in [
+        (Some(json!({"min": -2})), "100", "204", false),
+        (Some(json!({"min": -2})), "100", "204.02", true),
+        (Some(json!({"max": 6})), "-100", "212", false),
+        (Some(json!({"max": 6})), "-100", "212.02", true),
+        (Some(json!({"min": 2, "max": 2})), "2", "0", false),
+        (None, "999", "-1", false),
+    ] {
+        let (dui, port) = listener().await;
+        let mut policy = json!({"mode": "denylist"});
+        if let Some(range) = &range {
+            policy["scan_range"] = range.clone();
+        }
+        let config = ConfigFile::new(json!({"write_policy": policy}));
+        let protected = range.is_some();
+        let fake = tokio::spawn(async move {
+            let mut stream = accept_rci(&dui).await;
+            if protected {
+                expect_rci_command(&mut stream, "offset:value?").await;
+                stream
+                    .get_mut()
+                    .write_all(format!("offset:value={offset}\r\n> ").as_bytes())
+                    .await
+                    .unwrap();
+            }
+            if !denied {
+                expect_rci_command(&mut stream, &format!("scan:amplitude={amplitude}")).await;
+                stream.get_mut().write_all(b"> ").await.unwrap();
+            }
+            if !protected {
+                // Absent scan_range leaves both setters free of counterpart queries.
+                expect_rci_command(&mut stream, &format!("offset:value={offset}")).await;
+                stream.get_mut().write_all(b"> ").await.unwrap();
+            }
+            expect_rci_closed(&mut stream).await;
+            assert_no_connection(&dui).await;
+        });
+        let mut args = config.args().to_vec();
+        args.extend([
+            "--allow-writes".into(),
+            "--dui-port".into(),
+            port.to_string(),
+        ]);
+        let mut mcp = Mcp::start(&args).await;
+        let result = mcp
+            .call(
+                "digilock_set",
+                json!({
+                    "target": "dui", "command": "scan:amplitude", "value": amplitude
+                }),
+            )
+            .await;
+        assert_eq!(result["isError"], denied, "{range:?}: {result}");
+        if !protected {
+            let result = mcp
+                .call(
+                    "digilock_raw",
+                    json!({
+                        "target": "dui", "command": format!("offset:value={offset}")
+                    }),
+                )
+                .await;
+            assert_eq!(result["isError"], false, "{result}");
+        }
+        mcp.stop().await;
+        timeout(DEADLINE, fake).await.unwrap().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn scan_range_static_rejections_preserve_write_guards_without_querying() {
+    for (mode, commands, limits, allow_writes, rejected) in [
+        (
+            "allowlist",
+            json!([]),
+            json!([]),
+            true,
+            vec![("OFFSET: VALUE", "2"), ("SCAN: AMPLITUDE", "4")],
+        ),
+        (
+            "denylist",
+            json!([
+                {"target": "dui", "command": "offset:value"},
+                {"target": "dui", "command": "scan:amplitude"}
+            ]),
+            json!([]),
+            true,
+            vec![("OFFSET: VALUE", "2"), ("SCAN: AMPLITUDE", "4")],
+        ),
+        (
+            "denylist",
+            json!([]),
+            json!([
+                {"target": "dui", "command": "offset:value", "max": 1},
+                {"target": "dui", "command": "scan:amplitude", "allowed_values": ["0"]}
+            ]),
+            true,
+            vec![("OFFSET: VALUE", "2"), ("SCAN: AMPLITUDE", "4")],
+        ),
+        (
+            "denylist",
+            json!([]),
+            json!([]),
+            false,
+            vec![("offset:value", "2"), ("scan:amplitude", "4")],
+        ),
+        (
+            "denylist",
+            json!([]),
+            json!([]),
+            true,
+            vec![
+                ("offset:value", "NaN"),
+                ("offset:value", "inf"),
+                ("offset:value", "not-a-number"),
+                ("scan: amplitude", "-0.01"),
+                ("SCAN:AMPLITUDE", "NaN"),
+                ("scan:amplitude", "-inf"),
+                ("scan:amplitude", "1e999"),
+                ("scan:amplitude", "not-a-number"),
+            ],
+        ),
+    ] {
+        let (dui, port) = listener().await;
+        let config = ConfigFile::new(json!({"write_policy": {
+            "mode": mode, "commands": commands, "limits": limits,
+            "scan_range": {"min": -2, "max": 6}
+        }}));
+        let mut args = config.args().to_vec();
+        args.extend(["--dui-port".into(), port.to_string()]);
+        if allow_writes {
+            args.push("--allow-writes".into());
+        }
+        let mut mcp = Mcp::start(&args).await;
+        for (command, value) in rejected {
+            for (tool, arguments) in [
+                (
+                    "digilock_set",
+                    json!({"target": "dui", "command": command, "value": value}),
+                ),
+                (
+                    "digilock_raw",
+                    json!({"target": "dui", "command": format!("{command}={value}")}),
+                ),
+            ] {
+                let result = mcp.call(tool, arguments).await;
+                assert_eq!(
+                    result["isError"], true,
+                    "{mode}, {tool}, {command}={value}: {result}"
+                );
+            }
+        }
+        assert_no_connection(&dui).await;
+        mcp.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn scan_range_bad_current_values_and_device_errors_never_send_a_write() {
+    for (command, counterpart, bad_values) in [
+        (
+            "offset:value",
+            "scan:amplitude",
+            vec!["bad", "NaN", "inf", "-0.01", "1e999"],
+        ),
+        (
+            "scan:amplitude",
+            "offset:value",
+            vec!["bad", "NaN", "-inf", "1e999"],
+        ),
+    ] {
+        let (dui, port) = listener().await;
+        let config = ConfigFile::new(json!({
+            "write_policy": {"mode": "denylist", "scan_range": {"min": -2, "max": 6}}
+        }));
+        let mut replies = vec![
+            "%% Error: cannot read current control\r\n> ".to_owned(),
+            "> ".to_owned(),
+            "unrelated:value=0\r\n> ".to_owned(),
+            format!("{counterpart}=\r\n> "),
+        ];
+        replies.extend(
+            bad_values
+                .iter()
+                .map(|value| format!("{counterpart}={value}\r\n> ")),
+        );
+        let count = replies.len();
+        let fake = tokio::spawn(async move {
+            let mut stream = accept_rci(&dui).await;
+            for reply in replies {
+                for _ in 0..2 {
+                    expect_rci_command(&mut stream, &format!("{counterpart}?")).await;
+                    stream.get_mut().write_all(reply.as_bytes()).await.unwrap();
+                }
+            }
+            // A safe raw assignment still propagates the actual write's device error.
+            expect_rci_command(&mut stream, &format!("{counterpart}?")).await;
+            let current = if counterpart == "scan:amplitude" {
+                "4"
+            } else {
+                "2"
+            };
+            stream
+                .get_mut()
+                .write_all(format!("{counterpart}={current}\r\n> ").as_bytes())
+                .await
+                .unwrap();
+            let proposed = if command == "offset:value" { "2" } else { "4" };
+            expect_rci_command(&mut stream, &format!("{command}={proposed}")).await;
+            stream
+                .get_mut()
+                .write_all(b"%% Error: rejected write\r\n> ")
+                .await
+                .unwrap();
+            expect_rci_closed(&mut stream).await;
+            assert_no_connection(&dui).await;
+        });
+        let mut args = config.args().to_vec();
+        args.extend([
+            "--allow-writes".into(),
+            "--dui-port".into(),
+            port.to_string(),
+        ]);
+        let mut mcp = Mcp::start(&args).await;
+        let value = if command == "offset:value" { "2" } else { "4" };
+        for index in 0..count {
+            for (tool, arguments) in [
+                (
+                    "digilock_set",
+                    json!({"target": "dui", "command": command, "value": value}),
+                ),
+                (
+                    "digilock_raw",
+                    json!({"target": "dui", "command": format!("{command}={value}")}),
+                ),
+            ] {
+                let result = mcp.call(tool, arguments).await;
+                assert_eq!(
+                    result["isError"], true,
+                    "{command}, reply {index}, {tool}: {result}"
+                );
+                assert!(
+                    result["structuredContent"]["error"].as_str().is_some(),
+                    "{result}"
+                );
+            }
+        }
+        let result = mcp
+            .call(
+                "digilock_raw",
+                json!({
+                    "target": "dui", "command": format!("{command}={value}")
+                }),
+            )
+            .await;
+        assert_eq!(result["isError"], true, "{result}");
+        assert!(
+            result["structuredContent"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("rejected write"),
+            "{result}"
+        );
+        mcp.stop().await;
+        timeout(DEADLINE, fake).await.unwrap().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn scan_range_failed_counterpart_query_closes_without_assignment_or_retry() {
+    for (tool, command, counterpart) in [
+        ("digilock_set", "offset:value", "scan:amplitude"),
+        ("digilock_raw", "scan:amplitude", "offset:value"),
+    ] {
+        let (dui, port) = listener().await;
+        let config = ConfigFile::new(json!({
+            "write_policy": {"mode": "denylist", "scan_range": {"max": 6}}
+        }));
+        let fake = tokio::spawn(async move {
+            let mut stream = accept_rci(&dui).await;
+            expect_rci_command(&mut stream, &format!("{counterpart}?")).await;
+            // EOF before a complete query reply must not lead to an assignment.
+            stream
+                .get_mut()
+                .write_all(format!("{counterpart}=0\r\n>").as_bytes())
+                .await
+                .unwrap();
+            stream.get_mut().shutdown().await.unwrap();
+            expect_rci_closed(&mut stream).await;
+            assert_no_connection(&dui).await;
+        });
+        let mut args = config.args().to_vec();
+        args.extend([
+            "--allow-writes".into(),
+            "--dui-port".into(),
+            port.to_string(),
+        ]);
+        let mut mcp = Mcp::start(&args).await;
+        let arguments = if tool == "digilock_set" {
+            json!({"target": "dui", "command": command, "value": "0"})
+        } else {
+            json!({"target": "dui", "command": format!("{command}=0")})
+        };
+        let result = mcp.call(tool, arguments).await;
+        assert_eq!(result["isError"], true, "{tool}: {result}");
+        mcp.stop().await;
+        timeout(DEADLINE, fake).await.unwrap().unwrap();
+    }
+}
+
+#[tokio::test]
 async fn config_defaults_and_environment_path_do_not_enable_global_writes() {
     for mode in ["allowlist", "denylist"] {
         let (dms, dms_port) = listener().await;
@@ -866,6 +1344,170 @@ async fn startup_values_are_sent_before_initialize_in_order_with_optional_ports(
 }
 
 #[tokio::test]
+async fn scan_range_startup_queries_fresh_state_after_prior_writes_and_on_override() {
+    let (dui, port) = listener().await;
+    let (other_dui, other_port) = listener().await;
+    let config = ConfigFile::new(json!({
+        "write_policy": {"mode": "denylist", "scan_range": {"min": -2, "max": 6}},
+        "initial_values": [
+            {"target": "dui", "command": "OFFSET: VALUE", "value": "2"},
+            {"target": "dui", "command": "scan:amplitude", "value": "8"},
+            {"target": "dui", "command": "offset:value", "value": "1"},
+            {"target": "dui", "port": other_port, "command": "SCAN: AMPLITUDE", "value": "8"},
+            {"target": "dui", "command": "scan:amplitude", "value": "1"}
+        ]
+    }));
+    let (completed_tx, completed_rx) = oneshot::channel();
+    let fake = tokio::spawn(async move {
+        let mut stream = accept_rci(&dui).await;
+        for (command, reply) in [
+            ("scan:amplitude?", "scan:amplitude=8\r\n> "),
+            ("OFFSET: VALUE=2", "> "),
+            ("offset:value?", "offset:value=2\r\n> "),
+            ("scan:amplitude=8", "> "),
+            // An external change after the preceding write makes this offset safe.
+            ("scan:amplitude?", "scan:amplitude=1\r\n> "),
+            ("offset:value=1", "> "),
+        ] {
+            expect_rci_command(&mut stream, command).await;
+            if command == "offset:value=1" {
+                assert_no_connection(&other_dui).await;
+            }
+            stream.get_mut().write_all(reply.as_bytes()).await.unwrap();
+        }
+        let mut other_stream = accept_rci(&other_dui).await;
+        expect_rci_command(&mut other_stream, "offset:value?").await;
+        other_stream
+            .get_mut()
+            .write_all(b"offset:value=2\r\n> ")
+            .await
+            .unwrap();
+        expect_rci_command(&mut other_stream, "SCAN: AMPLITUDE=8").await;
+        assert!(
+            timeout(
+                Duration::from_millis(100),
+                stream.read_line(&mut String::new())
+            )
+            .await
+            .is_err(),
+            "later startup query preceded the override write reply"
+        );
+        other_stream.get_mut().write_all(b"> ").await.unwrap();
+        expect_rci_command(&mut stream, "offset:value?").await;
+        stream
+            .get_mut()
+            .write_all(b"offset:value=1\r\n> ")
+            .await
+            .unwrap();
+        expect_rci_command(&mut stream, "scan:amplitude=1").await;
+        stream.get_mut().write_all(b"> ").await.unwrap();
+        completed_tx.send(()).unwrap();
+        expect_rci_closed(&mut stream).await;
+        expect_rci_closed(&mut other_stream).await;
+        assert_no_connection(&dui).await;
+        assert_no_connection(&other_dui).await;
+    });
+    let mut args = config.args().to_vec();
+    args.extend([
+        "--allow-writes".into(),
+        "--dui-port".into(),
+        port.to_string(),
+    ]);
+    let mut mcp = Mcp::spawn(binary(&args));
+    timeout(DEADLINE, completed_rx).await.unwrap().unwrap();
+    mcp.initialize().await;
+    mcp.stop().await;
+    timeout(DEADLINE, fake).await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn scan_range_invalid_later_startup_value_preflights_before_any_connection() {
+    let (dms, dms_port) = listener().await;
+    let (dui, port) = listener().await;
+    let (other_dui, other_port) = listener().await;
+    for (command, value) in [
+        ("SCAN: AMPLITUDE", "-0.01"),
+        ("scan: amplitude", "NaN"),
+        ("scan:amplitude", "inf"),
+        ("scan:amplitude", "not-a-number"),
+        ("OFFSET: VALUE", "NaN"),
+        ("offset: value", "-inf"),
+        ("offset:value", "1e999"),
+        ("offset:value", "not-a-number"),
+    ] {
+        // No independent numeric limits: scan_range itself must parse proposed values.
+        let config = ConfigFile::new(json!({
+            "write_policy": {"mode": "denylist", "scan_range": {"max": 6}},
+            "initial_values": [
+                {"target": "dms", "command": "selected module", "value": "1"},
+                {"target": "dui", "port": other_port, "command": command, "value": value}
+            ]
+        }));
+        let mut args = config.args().to_vec();
+        args.extend([
+            "--allow-writes".into(),
+            "--dms-port".into(),
+            dms_port.to_string(),
+            "--dui-port".into(),
+            port.to_string(),
+        ]);
+        let error = assert_startup_failure(binary(&args)).await;
+        assert!(
+            error.contains("initial_values[1]"),
+            "{command}={value}: {error}"
+        );
+        assert_no_connection(&dms).await;
+        assert_no_connection(&dui).await;
+        assert_no_connection(&other_dui).await;
+    }
+}
+
+#[tokio::test]
+async fn scan_range_unsafe_startup_aborts_later_commands_without_replay_or_rollback() {
+    let (dui, port) = listener().await;
+    let (other_dui, other_port) = listener().await;
+    let config = ConfigFile::new(json!({
+        "write_policy": {"mode": "denylist", "scan_range": {"min": -2, "max": 6}},
+        "initial_values": [
+            {"target": "dui", "command": "offset:value", "value": "2"},
+            {"target": "dui", "command": "scan:amplitude", "value": "8"},
+            {"target": "dui", "command": "offset:value", "value": "2"},
+            {"target": "dui", "command": "pid1:proportional", "value": "0.25"},
+            {"target": "dui", "port": other_port, "command": "scan:amplitude", "value": "1"}
+        ]
+    }));
+    let fake = tokio::spawn(async move {
+        scripted_rci(
+            dui,
+            &[
+                ("scan:amplitude?", "scan:amplitude=8\r\n> "),
+                ("offset:value=2", "> "),
+                ("offset:value?", "offset:value=2\r\n> "),
+                ("scan:amplitude=8", "> "),
+                // Fresh state now violates both bounds; neither this nor later writes may run.
+                ("scan:amplitude?", "scan:amplitude=10\r\n> "),
+            ],
+        )
+        .await;
+    });
+    let mut args = config.args().to_vec();
+    args.extend([
+        "--allow-writes".into(),
+        "--dui-port".into(),
+        port.to_string(),
+    ]);
+    let error = assert_startup_failure(binary(&args)).await;
+    assert!(error.contains("initial_values[2]"), "{error}");
+    assert!(
+        error.contains("earlier writes may already have taken effect"),
+        "{error}"
+    );
+    assert!(error.contains("no commands were replayed"), "{error}");
+    timeout(DEADLINE, fake).await.unwrap().unwrap();
+    assert_no_connection(&other_dui).await;
+}
+
+#[tokio::test]
 async fn invalid_config_is_rejected_before_any_tcp_connection() {
     let (dms, dms_port) = listener().await;
     let (dui, dui_port) = listener().await;
@@ -873,6 +1515,15 @@ async fn invalid_config_is_rejected_before_any_tcp_connection() {
         "{",
         r#"{}"#,
         r#"{"write_policy":{"mode":"invalid"}}"#,
+        r#"{"write_policy":{"mode":"denylist","scan_range":{}}}"#,
+        r#"{"write_policy":{"mode":"denylist","scan_range":{"min":2,"max":1}}}"#,
+        r#"{"write_policy":{"mode":"denylist","scan_range":{"min":"NaN"}}}"#,
+        r#"{"write_policy":{"mode":"denylist","scan_range":{"max":"inf"}}}"#,
+        r#"{"write_policy":{"mode":"denylist","scan_range":{"min":1e999}}}"#,
+        r#"{"write_policy":{"mode":"denylist","scan_range":{"max":-1e999}}}"#,
+        r#"{"write_policy":{"mode":"denylist","scan_range":{"min":true}}}"#,
+        r#"{"write_policy":{"mode":"denylist","scan_range":{"max":[]}}}"#,
+        r#"{"write_policy":{"mode":"denylist","scan_range":{"min":null,"max":null}}}"#,
         r#"{"write_policy":{"mode":"denylist","limits":[{"target":"dui","command":"pid1:proportional","min":2,"max":1}]}}"#,
         r#"{"write_policy":{"mode":"denylist"},"initial_values":[{"target":"dui","command":"pid1:proportional","value":1}]}"#,
     ] {

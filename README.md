@@ -89,6 +89,8 @@ Explicit CLI options take precedence over their corresponding environment variab
 
 ## Operator configuration: startup values and write restrictions
 
+After every configuration, launch, firmware, or wiring change, use the [configuration safety-review checklist](docs/safety-config-review.md). It documents known limit-bypass paths, including routing/activation changes, combined signal contributions, relock, and indirect PID parameter updates, with a repeatable review record. Passing configuration parsing or wrapper tests alone does not establish hardware safety.
+
 Load a JSON file with `--config /absolute/path/digilock-config.json` (or `DIGILOCK_CONFIG`). It is read once at process startup; edits require a restart. There is no implicit file discovery or fallback if a supplied file cannot be loaded. CLI/environment endpoint settings remain separate from this file. For example, after reviewing the policy for your apparatus:
 
 ```sh
@@ -131,16 +133,54 @@ For an MCP client, append `"--config", "/absolute/path/digilock-config.json"` an
 - `limits` do **not** grant allowlist membership. For an otherwise permitted command, optional numeric `min` and `max` are inclusive. Either or both may be supplied. Bounds are finite JSON numbers; `min` must not exceed `max`. Known nonnumeric controls cannot have numeric bounds.
 - `allowed_values` is a nonempty list of exact RCI value strings, suitable for enums, booleans, or other discrete choices. Case and whitespace matter. If combined with numeric bounds, **both** restrictions apply.
 - Constrained numeric strings support a decimal dot or a single decimal comma, plus scientific notation. Comparisons use finite `f64` values; NaN, infinity, whitespace, mixed/repeated separators, units, and other unparseable values are rejected. No thousands separators are supported. The original string is sent unchanged: you must still use the decimal separator expected by Windows/RCI.
-- Limits supplement, rather than replace, the device's ranges and boolean/read-only checks. They do not account for interactions between parameters or guarantee physical safety.
+- Limits supplement, rather than replace, the device's ranges and boolean/read-only checks. Other than the explicit scan-envelope rule below, they do not account for interactions between parameters or guarantee physical safety.
 - With a file loaded, **raw assignments follow exactly the same checks as `digilock_set`**. Raw queries remain unaffected by the write policy. Arbitrary raw syntax that cannot be classified as one query or assignment is rejected, even with `--allow-writes`.
 
 Unknown JSON fields, duplicate command/limit keys (including spelling aliases), invalid constraints, and nonstring startup values are rejected rather than silently ignored. Known read-only controls cannot be listed as writable controls or given write limits. `digilock_info` exposes the loaded write policy and startup entry count offline.
+
+### Combined scan range limit
+
+Optionally add `scan_range` under `write_policy` to constrain the **entire scan envelope**, instead of independently limiting offset and amplitude:
+
+```json
+{
+  "write_policy": {
+    "mode": "allowlist",
+    "commands": [
+      { "target": "dui", "command": "offset:value" },
+      { "target": "dui", "command": "scan:amplitude" }
+    ],
+    "scan_range": { "min": -1, "max": 1 }
+  },
+  "initial_values": []
+}
+```
+
+The illustrative bounds above are in the same units as the RCI values; choose limits appropriate for your apparatus. `min` and `max` are inclusive finite JSON numbers. Either can be omitted, but at least one is required, and `min` must not exceed `max`. Omit `scan_range` (or set it to `null`) to retain the previous behavior with no combined limit.
+
+The rule requires:
+
+```text
+min <= offset:value - scan:amplitude / 2
+       offset:value + scan:amplitude / 2 <= max
+```
+
+Only the specified inequalities are checked for one-sided limits. **Scan amplitude is peak-to-peak**, so the envelope extends by half the amplitude on either side of the offset. The original peak-to-peak value is sent to RCI unchanged.
+
+- Before setting `offset:value`, the wrapper queries `scan:amplitude?` on the same DUI endpoint and combines that live amplitude with the proposed offset.
+- Before setting `scan:amplitude`, it queries `offset:value?` and combines that live offset with the proposed amplitude.
+- **Every relevant write uses a fresh query.** Neither previous replies nor successful writes or startup values are cached as hardware state. Proposed and live values must parse as finite numbers; amplitude must be nonnegative and the computed endpoints must be finite.
+- Missing/malformed replies, query errors/timeouts, or a violated bound prevent the assignment. Existing write opt-in, command policy, and individual limits are still enforced first; `scan_range` does not itself grant permission to write.
+- This applies to `digilock_set`, raw assignments (including command spelling aliases), and startup values on every DUI port. Ordinary queries remain unrestricted by the policy.
+- Each query/check/write holds one per-port session lock and uses **one whole-transaction timeout**. Other requests through this wrapper cannot interleave between the query and write. A blocked write is not retried or silently clamped.
+
+This is a guard on changes to these two controls, **not continuous monitoring or a hardware interlock**. A local DUI action or independent hardware/software update can still change state after the query. Ensure `offset:output` and `scan:output` select the intended common output; constrain their values with `allowed_values` where appropriate. Changing output selectors, enabling a scan, and other signal contributions are not covered by this rule. Existing unsafe state is not automatically corrected.
 
 ### Startup values
 
 `initial_values` defaults to `[]`. Add one entry for each settable parameter you want initialized; no unspecified defaults are sent. Entries use the same `target`, optional `port`, exact `command`, and string `value` fields as `digilock_set`. You may repeat a control deliberately to express an ordered sequence. Query-only controls cannot be initialized. All startup entries must be allowed by the write policy and satisfy its limits.
 
-**Startup values are hardware writes and require `--allow-writes`.** A nonempty startup list without write opt-in is a startup error, not a silently skipped initialization. The complete configuration and startup list are validated **before any TCP connection**. Valid entries are then sent sequentially in array order, waiting for each RCI reply, **before MCP initialization or any tool call is accepted**. This happens once per process launch, not on TCP reconnect.
+**Startup values are hardware writes and require `--allow-writes`.** A nonempty startup list without write opt-in is a startup error, not a silently skipped initialization. The configuration and all statically checkable startup values are validated **before any TCP connection**. When `scan_range` is configured, its live counterpart query and combined-range check run immediately before each relevant startup write; future entries are not used to excuse an unsafe intermediate range. Valid entries are then sent sequentially in array order, waiting for each RCI reply, **before MCP initialization or any tool call is accepted**. This happens once per process launch, not on TCP reconnect.
 
 Any device/transport error aborts startup, returns a nonzero exit status, and prevents subsequent entries from being sent. Earlier writes may already have taken effect; a failed or cancelled write may have taken effect too. There is **no automatic retry, rollback, or read-back verification**. Inspect the hardware state before restarting: a new process launch applies the list again. Startup errors and progress go to stderr only.
 
