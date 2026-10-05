@@ -1,8 +1,10 @@
 mod catalog;
+mod config;
+mod policy;
 mod rci;
 mod server;
 
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -30,9 +32,12 @@ struct Args {
     /// Maximum bytes in each welcome or response frame (increase for large graphs).
     #[arg(long, env = "DIGILOCK_MAX_RESPONSE_BYTES", default_value_t = 8_388_608)]
     max_response_bytes: usize,
-    /// Permit hardware writes and arbitrary raw commands. Disabled by default.
+    /// Permit hardware writes, subject to any configured policy. Disabled by default.
     #[arg(long, env = "DIGILOCK_ALLOW_WRITES", default_value_t = false)]
     allow_writes: bool,
+    /// JSON file containing write_policy and ordered initial_values.
+    #[arg(long, env = "DIGILOCK_CONFIG")]
+    config: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
@@ -55,7 +60,19 @@ async fn run(args: Args) -> Result<()> {
         timeout: Duration::from_millis(args.timeout_ms),
         max_response_bytes: args.max_response_bytes,
         allow_writes: args.allow_writes,
+        operator: args
+            .config
+            .as_deref()
+            .map(config::OperatorConfig::load)
+            .transpose()?,
     })?;
+    tokio::select! {
+        result = server.initialize() => result.context("applying startup values; earlier writes may already have taken effect; no commands were replayed")?,
+        result = tokio::signal::ctrl_c() => {
+            result.context("waiting for shutdown signal")?;
+            anyhow::bail!("startup cancelled; in-flight or earlier writes may already have taken effect");
+        }
+    }
     // Stdout belongs exclusively to the MCP transport; diagnostics go to stderr.
     let service = tokio::select! {
         result = server.serve(stdio()) => result.context("starting MCP stdio service")?,

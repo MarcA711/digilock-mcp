@@ -82,9 +82,69 @@ Explicit CLI options take precedence over their corresponding environment variab
 | `--dui-port` | `DIGILOCK_DUI_PORT` | `60001` | Default DUI RCI port; a tool request can select another discovered DUI port. |
 | `--timeout-ms` | `DIGILOCK_TIMEOUT_MS` | `5000` | Whole RCI transaction deadline in milliseconds, including queue wait, DNS, connect, welcome, send, and reply. |
 | `--max-response-bytes` | `DIGILOCK_MAX_RESPONSE_BYTES` | `8388608` (8 MiB) | Limit for each welcome or reply frame, including echo, line endings, and prompt; increase deliberately for large graphs. |
-| `--allow-writes` | `DIGILOCK_ALLOW_WRITES` | `false` | Allows hardware writes and arbitrary raw commands; use environment value `true` to opt in. |
+| `--allow-writes` | `DIGILOCK_ALLOW_WRITES` | `false` | Enables hardware writes, subject to any configured write policy; use environment value `true` to opt in. Without a configuration file it also permits arbitrary raw commands. |
+| `--config` | `DIGILOCK_CONFIG` | None | Path to an operator JSON configuration containing startup values and a write policy. |
 
 `--help` and `--version` print information and exit. Configuration requires a nonblank host, nonzero and distinct DMS/default DUI ports, a positive timeout, and a response limit of at least two bytes.
+
+## Operator configuration: startup values and write restrictions
+
+Load a JSON file with `--config /absolute/path/digilock-config.json` (or `DIGILOCK_CONFIG`). It is read once at process startup; edits require a restart. There is no implicit file discovery or fallback if a supplied file cannot be loaded. CLI/environment endpoint settings remain separate from this file. For example, after reviewing the policy for your apparatus:
+
+```sh
+./target/release/digilock-mcp --host 192.168.1.10 --config /absolute/path/digilock-config.json --allow-writes
+```
+
+For an MCP client, append `"--config", "/absolute/path/digilock-config.json"` and, only when intended, `"--allow-writes"` to its server `args`.
+
+[`digilock-config.example.json`](digilock-config.example.json) is a starting template with **no startup writes**. Its limits and enum labels are illustrative, **not certified safe values for your laser**. Determine actual safe settings and firmware-supported labels before enabling writes. A populated configuration has this shape:
+
+```json
+{
+  "write_policy": {
+    "mode": "allowlist",
+    "commands": [
+      { "target": "dui", "command": "pid1:lock:enable" },
+      { "target": "dui", "command": "pid1:proportional" },
+      { "target": "dui", "command": "pid1:input" }
+    ],
+    "limits": [
+      { "target": "dui", "command": "pid1:lock:enable", "allowed_values": ["false"] },
+      { "target": "dui", "command": "pid1:proportional", "min": 0, "max": 1 },
+      { "target": "dui", "command": "pid1:input", "allowed_values": ["main in"] }
+    ]
+  },
+  "initial_values": [
+    { "target": "dui", "command": "pid1:lock:enable", "value": "false" },
+    { "target": "dui", "command": "pid1:proportional", "value": "0,25" }
+  ]
+}
+```
+
+### Write policy
+
+- `write_policy` and its `mode` are required when loading a file. `commands` and `limits` default to empty lists.
+- **`allowlist`**: only listed `(target, command)` pairs may be set. An empty list denies all writes.
+- **`denylist`**: listed pairs may not be set; other set operations are permitted. An empty list permits all sets, subject to the global write guard, catalog checks, and any limits. Unknown firmware commands can be listed, but their spelling/types cannot be verified offline.
+- **Queries, range queries, and help queries are unaffected by this policy**, even for blocked commands or values outside the write limits. Existing protocol/catalog validation remains: without write opt-in, unknown queries are still rejected by the original read-only guard.
+- Command entries are control names, without `?` or `=`. Use documented spelling when sending requests. Policy matching conservatively ignores ASCII case and ASCII spaces to prevent spelling variants bypassing restrictions; this may also treat distinct firmware names as equivalent. DMS and DUI remain separate targets. A DUI rule applies to **every DUI port**, including request overrides; changing the port cannot bypass the rule.
+- `limits` do **not** grant allowlist membership. For an otherwise permitted command, optional numeric `min` and `max` are inclusive. Either or both may be supplied. Bounds are finite JSON numbers; `min` must not exceed `max`. Known nonnumeric controls cannot have numeric bounds.
+- `allowed_values` is a nonempty list of exact RCI value strings, suitable for enums, booleans, or other discrete choices. Case and whitespace matter. If combined with numeric bounds, **both** restrictions apply.
+- Constrained numeric strings support a decimal dot or a single decimal comma, plus scientific notation. Comparisons use finite `f64` values; NaN, infinity, whitespace, mixed/repeated separators, units, and other unparseable values are rejected. No thousands separators are supported. The original string is sent unchanged: you must still use the decimal separator expected by Windows/RCI.
+- Limits supplement, rather than replace, the device's ranges and boolean/read-only checks. They do not account for interactions between parameters or guarantee physical safety.
+- With a file loaded, **raw assignments follow exactly the same checks as `digilock_set`**. Raw queries remain unaffected by the write policy. Arbitrary raw syntax that cannot be classified as one query or assignment is rejected, even with `--allow-writes`.
+
+Unknown JSON fields, duplicate command/limit keys (including spelling aliases), invalid constraints, and nonstring startup values are rejected rather than silently ignored. Known read-only controls cannot be listed as writable controls or given write limits. `digilock_info` exposes the loaded write policy and startup entry count offline.
+
+### Startup values
+
+`initial_values` defaults to `[]`. Add one entry for each settable parameter you want initialized; no unspecified defaults are sent. Entries use the same `target`, optional `port`, exact `command`, and string `value` fields as `digilock_set`. You may repeat a control deliberately to express an ordered sequence. Query-only controls cannot be initialized. All startup entries must be allowed by the write policy and satisfy its limits.
+
+**Startup values are hardware writes and require `--allow-writes`.** A nonempty startup list without write opt-in is a startup error, not a silently skipped initialization. The complete configuration and startup list are validated **before any TCP connection**. Valid entries are then sent sequentially in array order, waiting for each RCI reply, **before MCP initialization or any tool call is accepted**. This happens once per process launch, not on TCP reconnect.
+
+Any device/transport error aborts startup, returns a nonzero exit status, and prevents subsequent entries from being sent. Earlier writes may already have taken effect; a failed or cancelled write may have taken effect too. There is **no automatic retry, rollback, or read-back verification**. Inspect the hardware state before restarting: a new process launch applies the list again. Startup errors and progress go to stderr only.
+
+Protect the configuration and launch arguments from modification by untrusted clients. These checks cover only this wrapper: local DUI controls and other direct RCI clients can still change hardware. They are not a hardware interlock or network authentication layer.
 
 ## Tools and exact argument fields
 
@@ -246,7 +306,7 @@ Use `digilock_query` with `command: "commandlist"` on the relevant endpoint for 
 {"name":"digilock_raw","arguments":{"target":"dui","port":60007,"command":"pid1:proportional?"}}
 ```
 
-Read-only raw access permits only catalogued queries and catalogued range/help requests. With writes enabled, raw commands bypass catalog access/type checks and can perform arbitrary hardware operations, including assignments that the typed setter would reject. They must still be nonempty and contain no control characters. Treat raw write access as full RCI authority, not a safe restricted API.
+Read-only raw access permits only catalogued queries and catalogued range/help requests. Without a configuration file, writes-enabled raw commands retain the legacy escape hatch: they bypass catalog access/type checks and can perform arbitrary hardware operations, including assignments that the typed setter would reject. They must still be nonempty and contain no control characters. Treat raw write access **without a configuration file** as full RCI authority, not a safe restricted API. With a configuration file loaded, raw assignments obey catalog checks and the operator command/value policy, and arbitrary raw syntax is rejected.
 
 ## Safety, connections, and failure handling
 
@@ -265,7 +325,10 @@ Read-only raw access permits only catalogued queries and catalogued range/help r
 ## Source map
 
 - `src/main.rs`: CLI/environment configuration and stdio MCP startup.
-- `src/server.rs`: tool schemas, endpoint routing, catalog access checks, and write policy.
+- `src/server.rs`: tool schemas, endpoint routing, startup writes, and catalog/policy enforcement.
+- `src/config.rs`: strict operator JSON configuration loading.
+- `src/policy.rs`: allowlist/denylist matching and numeric/discrete value limits.
+- `digilock-config.example.json`: illustrative configuration template without startup writes.
 - `src/rci.rs`: persistent TCP sessions, prompt framing, transaction deadlines, and mock transport tests.
 - `src/catalog.rs`: embedded catalog loading and command/value validation.
 - `tests/stdio.rs`: end-to-end MCP stdio tests with local fake RCI endpoints.

@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     handler::server::{router::tool::ToolRouter, tool::ToolCallContext, wrapper::Parameters},
@@ -17,6 +17,8 @@ use serde_json::{Value, json};
 
 use crate::{
     catalog::{self, Command, Target},
+    config::OperatorConfig,
+    policy::same_command,
     rci::RciClient,
 };
 
@@ -28,6 +30,7 @@ pub struct Config {
     pub timeout: Duration,
     pub max_response_bytes: usize,
     pub allow_writes: bool,
+    pub operator: Option<OperatorConfig>,
 }
 
 #[derive(Clone)]
@@ -69,7 +72,8 @@ pub struct RawRequest {
     #[serde(flatten)]
     pub endpoint: Endpoint,
     /// One complete RCI command, without CR/LF. Read-only mode permits only catalogued
-    /// queries and their range/help queries. Other commands require --allow-writes.
+    /// queries and their range/help queries. Assignments require --allow-writes and
+    /// obey configured command/value restrictions; a policy rejects arbitrary syntax.
     pub command: String,
 }
 
@@ -94,16 +98,67 @@ impl DigiLockServer {
         if config.timeout.is_zero() || config.max_response_bytes < 2 {
             bail!("timeout must be positive and max-response-bytes must be at least 2");
         }
-        Ok(Self {
+        let catalog = catalog::load()?;
+        if let Some(operator) = &config.operator {
+            operator
+                .write_policy
+                .validate(&catalog)
+                .context("invalid write policy")?;
+        }
+        let server = Self {
             client: Arc::new(RciClient::new(
                 config.host.clone(),
                 config.timeout,
                 config.max_response_bytes,
             )),
-            catalog: Arc::new(catalog::load()?),
+            catalog: Arc::new(catalog),
             config,
             tool_router: Self::tool_router(),
-        })
+        };
+        // Preflight every startup operation before opening any connection.
+        server.startup_commands()?;
+        Ok(server)
+    }
+
+    fn startup_commands(&self) -> Result<Vec<(Endpoint, String)>> {
+        let mut commands = Vec::new();
+        if let Some(operator) = &self.config.operator {
+            for (index, initial) in operator.initial_values.iter().enumerate() {
+                let request = SetRequest {
+                    control: ControlRequest {
+                        endpoint: Endpoint {
+                            target: initial.target,
+                            port: initial.port,
+                        },
+                        command: initial.command.clone(),
+                    },
+                    value: initial.value.clone(),
+                };
+                let command = (|| {
+                    self.port(&request.control.endpoint)?;
+                    self.set_command(&request)
+                })()
+                .with_context(|| {
+                    format!(
+                        "invalid initial_values[{index}] ({:?}:{})",
+                        initial.target, initial.command
+                    )
+                })?;
+                commands.push((request.control.endpoint, command));
+            }
+        }
+        Ok(commands)
+    }
+
+    /// Apply ordered, prevalidated writes before serving any MCP requests.
+    pub async fn initialize(&self) -> Result<()> {
+        for (index, (endpoint, command)) in self.startup_commands()?.into_iter().enumerate() {
+            self.execute(&endpoint, &command)
+                .await
+                .with_context(|| format!("initial_values[{index}] failed"))?;
+            eprintln!("Applied initial_values[{index}] to {:?}", endpoint.target);
+        }
+        Ok(())
     }
 
     fn port(&self, endpoint: &Endpoint) -> Result<u16> {
@@ -159,7 +214,11 @@ impl DigiLockServer {
         let name = &request.control.command;
         catalog::validate_name(name)?;
         catalog::validate_value(&request.value)?;
-        if let Some(entry) = catalog::lookup(&self.catalog, request.control.endpoint.target, name) {
+        for entry in self.catalog.iter().filter(|entry| {
+            entry.target == request.control.endpoint.target
+                && (entry.command == *name
+                    || (self.config.operator.is_some() && same_command(&entry.command, name)))
+        }) {
             if !entry.set {
                 bail!("{name} is read-only according to the manual");
             }
@@ -167,8 +226,12 @@ impl DigiLockServer {
                 bail!("{name} requires the boolean string true or false");
             }
         }
-        // Numeric ranges and enum labels are firmware/locale dependent; the RCI
-        // validates them. The manual gives no portable limits to enforce here.
+        if let Some(operator) = &self.config.operator {
+            operator
+                .write_policy
+                .check(request.control.endpoint.target, name, &request.value)?;
+        }
+        // Firmware still enforces its own ranges in addition to operator limits.
         Ok(format!("{name}={}", request.value))
     }
 
@@ -177,7 +240,21 @@ impl DigiLockServer {
         if command.trim().is_empty() || command.chars().any(char::is_control) {
             bail!("raw command must be nonempty and contain no control characters");
         }
-        if self.config.allow_writes {
+        if self.config.operator.is_some() {
+            if let Some((name, value)) = command.split_once('=') {
+                self.set_command(&SetRequest {
+                    control: ControlRequest {
+                        endpoint: Endpoint {
+                            target: request.endpoint.target,
+                            port: request.endpoint.port,
+                        },
+                        command: name.into(),
+                    },
+                    value: value.into(),
+                })?;
+                return Ok(());
+            }
+        } else if self.config.allow_writes {
             return Ok(());
         }
         for suffix in [".range?", ".help?", "?"] {
@@ -186,7 +263,9 @@ impl DigiLockServer {
                 return Ok(());
             }
         }
-        bail!("raw writes or unrecognized commands are disabled; use --allow-writes");
+        bail!(
+            "raw command is not an allowed query or assignment; arbitrary raw syntax is disabled when a policy is loaded and writes otherwise require --allow-writes"
+        );
     }
 
     async fn execute(&self, endpoint: &Endpoint, command: &str) -> Result<Value> {
@@ -229,6 +308,8 @@ impl DigiLockServer {
             "timeout_ms": self.config.timeout.as_millis(),
             "max_response_bytes": self.config.max_response_bytes,
             "allow_writes": self.config.allow_writes,
+            "write_policy": self.config.operator.as_ref().map(|operator| &operator.write_policy),
+            "initial_values_count": self.config.operator.as_ref().map_or(0, |operator| operator.initial_values.len()),
             "manual": "DigiLock 110 RCI M-038 version 05, February 2023",
             "catalog_entries": self.catalog.len(),
         }))
@@ -267,7 +348,7 @@ impl DigiLockServer {
     }
 
     #[tool(
-        description = "Set a DigiLock control (sends name=value). Requires operator --allow-writes. Can change physical hardware outputs, enable feedback, or stop applications; confirm the intended operation and query the range first. Values are strings using the Windows host's locale. Successful writes may return empty text; query again to verify.",
+        description = "Set a DigiLock control (sends name=value). Requires operator --allow-writes and must satisfy the configured command/value policy. Can change physical hardware outputs, enable feedback, or stop applications; confirm the intended operation and query the range first. Values are strings using the Windows host's locale. Successful writes may return empty text; query again to verify.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -307,7 +388,7 @@ impl DigiLockServer {
     }
 
     #[tool(
-        description = "Send one raw RCI command without CR/LF. Escape hatch for firmware-specific names. Read-only mode permits only documented queries, range and help. With --allow-writes this can perform arbitrary hardware operations; never retry a timed-out write automatically.",
+        description = "Send one raw RCI command without CR/LF. Escape hatch for firmware-specific names. Read-only mode permits only documented queries, range and help. With a configuration file, assignments obey the same command/value policy as digilock_set, and arbitrary raw syntax is rejected. Without a file, --allow-writes grants arbitrary hardware operations; never retry a timed-out write automatically.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -369,7 +450,7 @@ impl ServerHandler for DigiLockServer {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")))
             .with_instructions(format!(
-                "Control TOPTICA DigiLock 110 through its Windows DMS/DUI software. Writes enabled: {}. Start with digilock_info and digilock_commands. DMS manages modules; DUI controls an individual module. Discover actual DUI ports using DMS modules:port numbers, not assumed module numbering. Each RCI endpoint allows one client: close other telnet/automation clients. Never automatically replay a timed-out write: it may already have executed. Query ranges before setting controls. For graphs activate the relevant display first (a write). Replies and values are strings; graph encoding is not specified by the manual.",
+                "Control TOPTICA DigiLock 110 through its Windows DMS/DUI software. Writes enabled: {}. Start with digilock_info for configured write restrictions and digilock_commands for control discovery. Configured restrictions apply to sets and raw assignments, not queries. DMS manages modules; DUI controls an individual module. Discover actual DUI ports using DMS modules:port numbers, not assumed module numbering. Each RCI endpoint allows one client: close other telnet/automation clients. Never automatically replay a timed-out write: it may already have executed. Query ranges before setting controls. For graphs activate the relevant display first (a write). Replies and values are strings; graph encoding is not specified by the manual.",
                 self.config.allow_writes
             ))
     }
@@ -387,6 +468,7 @@ mod tests {
             timeout: Duration::from_secs(1),
             max_response_bytes: 1024,
             allow_writes,
+            operator: None,
         })
         .unwrap()
     }

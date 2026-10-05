@@ -1,0 +1,16 @@
+{
+  "write_policy": {
+    "mode": "allowlist",
+    "commands": [
+      { "target": "dui", "command": "pid1:proportional" },
+      { "target": "dui", "command": "pid1:lock:enable" },
+      { "target": "dui", "command": "pid1:input" }
+    ],
+    "limits": [
+      { "target": "dui", "command": "pid1:proportional", "min": 0, "max": 1 },
+      { "target": "dui", "command": "pid1:lock:enable", "allowed_values": ["false"] },
+      { "target": "dui", "command": "pid1:input", "allowed_values": ["main in"] }
+    ]
+  },
+  "initial_values": []
+}

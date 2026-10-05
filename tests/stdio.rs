@@ -1,11 +1,18 @@
 //! End-to-end tests of the shipped binary, using MCP JSON-RPC over stdio and
 //! fake local RCI servers. No DigiLock hardware or Python dependencies required.
-use std::{process::Stdio, time::Duration};
+use std::{
+    fs::{self, OpenOptions},
+    io::Write,
+    path::PathBuf,
+    process::Stdio,
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
+};
 
 use serde_json::{Value, json};
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     process::{Child, ChildStdin, ChildStdout, Command},
     sync::oneshot,
     time::timeout,
@@ -22,27 +29,23 @@ struct Mcp {
 
 impl Mcp {
     async fn start(extra: &[String]) -> Self {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_digilock-mcp"));
-        command
-            .args(["--host", "127.0.0.1"])
-            .args(extra)
-            .env_remove("DIGILOCK_ALLOW_WRITES")
-            .env_remove("DIGILOCK_DMS_PORT")
-            .env_remove("DIGILOCK_DUI_PORT")
-            .env_remove("DIGILOCK_TIMEOUT_MS")
-            .env_remove("DIGILOCK_MAX_RESPONSE_BYTES")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .kill_on_drop(true);
+        let mut client = Self::spawn(binary(extra));
+        client.initialize().await;
+        client
+    }
+
+    fn spawn(mut command: Command) -> Self {
         let mut child = command.spawn().unwrap();
-        let mut client = Self {
+        Self {
             input: child.stdin.take().unwrap(),
             output: BufReader::new(child.stdout.take().unwrap()),
             child,
             next_id: 1,
-        };
-        let init = client
+        }
+    }
+
+    async fn initialize(&mut self) {
+        let init = self
             .request(
                 "initialize",
                 json!({
@@ -52,10 +55,8 @@ impl Mcp {
             )
             .await;
         assert!(init.get("result").is_some(), "{init}");
-        client
-            .send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
+        self.send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
             .await;
-        client
     }
 
     async fn send(&mut self, message: Value) {
@@ -110,6 +111,124 @@ impl Mcp {
         let status = timeout(DEADLINE, child.wait()).await.unwrap().unwrap();
         assert!(status.success(), "{status}");
     }
+}
+
+fn binary(extra: &[String]) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_digilock-mcp"));
+    command
+        .args(["--host", "127.0.0.1"])
+        .args(extra)
+        .env_remove("DIGILOCK_CONFIG")
+        .env_remove("DIGILOCK_ALLOW_WRITES")
+        .env_remove("DIGILOCK_DMS_PORT")
+        .env_remove("DIGILOCK_DUI_PORT")
+        .env_remove("DIGILOCK_TIMEOUT_MS")
+        .env_remove("DIGILOCK_MAX_RESPONSE_BYTES")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true);
+    command
+}
+
+struct ConfigFile(PathBuf);
+
+impl ConfigFile {
+    fn new(config: Value) -> Self {
+        Self::raw(&serde_json::to_string(&config).unwrap())
+    }
+
+    fn raw(contents: &str) -> Self {
+        static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
+        loop {
+            let path = std::env::temp_dir().join(format!(
+                "digilock-mcp-stdio-{}-{}.json",
+                std::process::id(),
+                NEXT_FILE.fetch_add(1, Ordering::Relaxed)
+            ));
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(mut file) => {
+                    let config = Self(path);
+                    file.write_all(contents.as_bytes()).unwrap();
+                    return config;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("creating temporary configuration: {error}"),
+            }
+        }
+    }
+
+    fn args(&self) -> [String; 2] {
+        ["--config".into(), self.0.to_str().unwrap().into()]
+    }
+}
+
+impl Drop for ConfigFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+async fn accept_rci(listener: &TcpListener) -> BufReader<TcpStream> {
+    let (mut stream, _) = timeout(DEADLINE, listener.accept()).await.unwrap().unwrap();
+    stream.write_all(b"Fake RCI\r\n> ").await.unwrap();
+    BufReader::new(stream)
+}
+
+async fn expect_rci_command(stream: &mut BufReader<TcpStream>, expected: &str) {
+    let mut command = String::new();
+    timeout(DEADLINE, stream.read_line(&mut command))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(command, format!("{expected}\r\n"));
+}
+
+async fn expect_rci_closed(stream: &mut BufReader<TcpStream>) {
+    let mut command = String::new();
+    let count = timeout(DEADLINE, stream.read_line(&mut command))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(count, 0, "unexpected additional RCI command: {command:?}");
+}
+
+async fn scripted_rci(listener: TcpListener, exchanges: &[(&str, &str)]) {
+    let mut stream = accept_rci(&listener).await;
+    for (expected, reply) in exchanges {
+        expect_rci_command(&mut stream, expected).await;
+        stream.get_mut().write_all(reply.as_bytes()).await.unwrap();
+    }
+    expect_rci_closed(&mut stream).await;
+    assert!(
+        timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err(),
+        "unexpected RCI reconnection"
+    );
+}
+
+async fn assert_no_connection(listener: &TcpListener) {
+    assert!(
+        timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err(),
+        "invalid or denied operation opened a TCP connection"
+    );
+}
+
+async fn assert_startup_failure(mut command: Command) -> String {
+    command.stderr(Stdio::piped());
+    let output = timeout(DEADLINE, command.spawn().unwrap().wait_with_output())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!output.status.success(), "startup unexpectedly succeeded");
+    assert!(
+        output.stdout.is_empty(),
+        "startup emitted MCP stdout: {output:?}"
+    );
+    String::from_utf8(output.stderr).unwrap()
 }
 
 async fn listener() -> (TcpListener, u16) {
@@ -329,6 +448,581 @@ async fn mcp_cancellation_closes_in_flight_session_and_prevents_queued_write() {
     assert_eq!(mcp.call("digilock_info", json!({})).await["isError"], false);
     timeout(DEADLINE, fake).await.unwrap().unwrap();
     mcp.stop().await;
+}
+
+#[tokio::test]
+async fn config_allowlist_applies_to_sets_and_raw_without_restricting_queries() {
+    let (dms, dms_port) = listener().await;
+    let (dui, port) = listener().await;
+    let config = ConfigFile::new(json!({
+        "write_policy": {
+            "mode": "allowlist",
+            "commands": [
+                {"target": "dui", "command": "pid1:proportional"},
+                {"target": "dui", "command": "pid1:lock:enable"}
+            ],
+            "limits": [
+                {"target": "dui", "command": "pid1:proportional", "min": 0, "max": 1},
+                {"target": "dui", "command": "pid1:lock:enable", "allowed_values": ["false"]}
+            ]
+        }
+    }));
+    let fake = tokio::spawn(async move {
+        scripted_rci(
+            dui,
+            &[
+                ("pid1:proportional=0,25", "> "),
+                ("pid1:proportional=1e0", "> "),
+                ("pid1:lock:enable=false", "> "),
+                ("pid1:proportional?", "pid1:proportional=999\r\n> "),
+                ("pid1:lock:enable?", "pid1:lock:enable=true\r\n> "),
+                ("pid2:proportional?", "pid2:proportional=999\r\n> "),
+                (
+                    "pid2:proportional.range?",
+                    "pid2:proportional.range=0 ... 10000\r\n> ",
+                ),
+                ("pid2:proportional.help?", "help text\r\n> "),
+                ("pid2:proportional?", "pid2:proportional=999\r\n> "),
+                ("firmware:extra?", "firmware:extra=42\r\n> "),
+            ],
+        )
+        .await;
+    });
+    let mut args = config.args().to_vec();
+    args.extend([
+        "--allow-writes".into(),
+        "--dms-port".into(),
+        dms_port.to_string(),
+        "--dui-port".into(),
+        port.to_string(),
+    ]);
+    let mut mcp = Mcp::start(&args).await;
+    for (tool, arguments) in [
+        (
+            "digilock_set",
+            json!({"target": "dui", "command": "pid2:proportional", "value": "0.25"}),
+        ),
+        (
+            "digilock_raw",
+            json!({"target": "dui", "command": "pid2:proportional=0.25"}),
+        ),
+        (
+            "digilock_set",
+            json!({"target": "dms", "command": "pid1:proportional", "value": "0.25"}),
+        ),
+        (
+            "digilock_raw",
+            json!({"target": "dms", "command": "pid1:proportional=0.25"}),
+        ),
+        (
+            "digilock_set",
+            json!({"target": "dui", "command": "pid1:lock:enable", "value": "true"}),
+        ),
+        (
+            "digilock_raw",
+            json!({"target": "dui", "command": "pid1:lock:enable=true"}),
+        ),
+        (
+            "digilock_raw",
+            json!({"target": "dui", "command": "pid1:lock:enable=0"}),
+        ),
+        (
+            "digilock_raw",
+            json!({"target": "dui", "command": "scope:graph=1"}),
+        ),
+        (
+            "digilock_raw",
+            json!({"target": "dui", "command": "program:exit"}),
+        ),
+        (
+            "digilock_raw",
+            json!({"target": "dui", "command": "pid1:proportional=0.25;program:exit=true"}),
+        ),
+        (
+            "digilock_raw",
+            json!({"target": "dui", "command": "pid1:proportional?\r\nprogram:exit=true"}),
+        ),
+    ] {
+        let result = mcp.call(tool, arguments).await;
+        assert_eq!(result["isError"], true, "{tool}: {result}");
+    }
+    for value in ["-0.01", "1.01", "NaN", "inf", "0,2.5", " 0.25"] {
+        for (tool, arguments) in [
+            (
+                "digilock_set",
+                json!({"target": "dui", "command": "pid1:proportional", "value": value}),
+            ),
+            (
+                "digilock_raw",
+                json!({"target": "dui", "command": format!("pid1:proportional={value}")}),
+            ),
+        ] {
+            let result = mcp.call(tool, arguments).await;
+            assert_eq!(
+                result["isError"], true,
+                "{tool} accepted {value:?}: {result}"
+            );
+        }
+    }
+    for (tool, arguments) in [
+        (
+            "digilock_set",
+            json!({"target": "dui", "command": "pid1:proportional", "value": "0,25"}),
+        ),
+        (
+            "digilock_raw",
+            json!({"target": "dui", "command": "pid1:proportional=1e0"}),
+        ),
+        (
+            "digilock_set",
+            json!({"target": "dui", "command": "pid1:lock:enable", "value": "false"}),
+        ),
+        (
+            "digilock_query",
+            json!({"target": "dui", "command": "pid1:proportional"}),
+        ),
+        (
+            "digilock_raw",
+            json!({"target": "dui", "command": "pid1:lock:enable?"}),
+        ),
+        (
+            "digilock_query",
+            json!({"target": "dui", "command": "pid2:proportional"}),
+        ),
+        (
+            "digilock_range",
+            json!({"target": "dui", "command": "pid2:proportional"}),
+        ),
+        (
+            "digilock_help",
+            json!({"target": "dui", "command": "pid2:proportional"}),
+        ),
+        (
+            "digilock_raw",
+            json!({"target": "dui", "command": "pid2:proportional?"}),
+        ),
+        (
+            "digilock_raw",
+            json!({"target": "dui", "command": "firmware:extra?"}),
+        ),
+    ] {
+        let result = mcp.call(tool, arguments).await;
+        assert_eq!(result["isError"], false, "{tool}: {result}");
+    }
+    mcp.stop().await;
+    timeout(DEADLINE, fake).await.unwrap().unwrap();
+    assert_no_connection(&dms).await;
+}
+
+#[tokio::test]
+async fn config_denylist_and_limits_cannot_be_bypassed_by_raw_aliases_or_ports() {
+    let (dms, dms_port) = listener().await;
+    let (dui, port) = listener().await;
+    let (other_dui, other_port) = listener().await;
+    let config = ConfigFile::new(json!({
+        "write_policy": {
+            "mode": "denylist",
+            "commands": [{"target": "dui", "command": "pid1:lock:enable"}],
+            "limits": [{"target": "dui", "command": "pid1:proportional", "max": 1,
+                        "allowed_values": ["0,25", "1e0", "2"]}]
+        }
+    }));
+    let fake = tokio::spawn(async move {
+        scripted_rci(
+            dui,
+            &[
+                ("pid1:proportional=0,25", "> "),
+                ("PID1:PROPORTIONAL=1e0", "> "),
+                ("pid1:lock:enable?", "pid1:lock:enable=true\r\n> "),
+                ("pid1:lock:enable?", "pid1:lock:enable=true\r\n> "),
+            ],
+        )
+        .await;
+    });
+    let mut args = config.args().to_vec();
+    args.extend([
+        "--allow-writes".into(),
+        "--dms-port".into(),
+        dms_port.to_string(),
+        "--dui-port".into(),
+        port.to_string(),
+    ]);
+    let mut mcp = Mcp::start(&args).await;
+    for command in ["pid1:lock:enable", "PID1:LOCK:ENABLE", "pid1: lock: enable"] {
+        for (tool, arguments) in [
+            (
+                "digilock_set",
+                json!({"target": "dui", "port": other_port, "command": command, "value": "true"}),
+            ),
+            (
+                "digilock_raw",
+                json!({"target": "dui", "port": other_port, "command": format!("{command}=true")}),
+            ),
+        ] {
+            let result = mcp.call(tool, arguments).await;
+            assert_eq!(result["isError"], true, "{tool}: {result}");
+            assert!(
+                result["structuredContent"]["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("denylisted"),
+                "{result}"
+            );
+        }
+    }
+    for value in ["0.25", "2"] {
+        for (tool, arguments) in [
+            (
+                "digilock_set",
+                json!({"target": "dui", "port": other_port, "command": "PID1:PROPORTIONAL", "value": value}),
+            ),
+            (
+                "digilock_raw",
+                json!({"target": "dui", "port": other_port, "command": format!("pid1: proportional={value}")}),
+            ),
+        ] {
+            let result = mcp.call(tool, arguments).await;
+            assert_eq!(result["isError"], true, "{tool}: {result}");
+            let error = result["structuredContent"]["error"].as_str().unwrap();
+            assert!(
+                error.contains(if value == "2" {
+                    "maximum"
+                } else {
+                    "not allowed"
+                }),
+                "{result}"
+            );
+        }
+    }
+    assert_no_connection(&other_dui).await;
+    for (tool, arguments) in [
+        (
+            "digilock_set",
+            json!({"target": "dui", "command": "pid1:proportional", "value": "0,25"}),
+        ),
+        (
+            "digilock_raw",
+            json!({"target": "dui", "command": "PID1:PROPORTIONAL=1e0"}),
+        ),
+        (
+            "digilock_query",
+            json!({"target": "dui", "command": "pid1:lock:enable"}),
+        ),
+        (
+            "digilock_raw",
+            json!({"target": "dui", "command": "pid1:lock:enable?"}),
+        ),
+    ] {
+        let result = mcp.call(tool, arguments).await;
+        assert_eq!(result["isError"], false, "{tool}: {result}");
+    }
+    mcp.stop().await;
+    timeout(DEADLINE, fake).await.unwrap().unwrap();
+    assert_no_connection(&dms).await;
+}
+
+#[tokio::test]
+async fn config_defaults_and_environment_path_do_not_enable_global_writes() {
+    for mode in ["allowlist", "denylist"] {
+        let (dms, dms_port) = listener().await;
+        let (dui, port) = listener().await;
+        let config = ConfigFile::new(json!({"write_policy": {"mode": mode}}));
+        let mut command = binary(&[
+            "--dms-port".into(),
+            dms_port.to_string(),
+            "--dui-port".into(),
+            port.to_string(),
+        ]);
+        command.env("DIGILOCK_CONFIG", &config.0);
+        let mut mcp = Mcp::spawn(command);
+        mcp.initialize().await;
+        let info = mcp.call("digilock_info", json!({})).await;
+        assert_eq!(info["structuredContent"]["allow_writes"], false);
+        assert_eq!(info["structuredContent"]["write_policy"]["mode"], mode);
+        assert_eq!(info["structuredContent"]["initial_values_count"], 0);
+        for (tool, arguments) in [
+            (
+                "digilock_set",
+                json!({"target": "dui", "command": "pid1:proportional", "value": "0.25"}),
+            ),
+            (
+                "digilock_raw",
+                json!({"target": "dui", "command": "pid1:proportional=0.25"}),
+            ),
+        ] {
+            let result = mcp.call(tool, arguments).await;
+            assert_eq!(result["isError"], true, "{mode}, {tool}: {result}");
+            assert!(
+                result["structuredContent"]["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("--allow-writes"),
+                "{result}"
+            );
+        }
+        assert_no_connection(&dui).await;
+        let fake = tokio::spawn(async move {
+            scripted_rci(
+                dui,
+                &[
+                    ("pid1:proportional?", "pid1:proportional=5\r\n> "),
+                    ("pid1:proportional?", "pid1:proportional=5\r\n> "),
+                ],
+            )
+            .await;
+        });
+        for (tool, command) in [
+            ("digilock_query", "pid1:proportional"),
+            ("digilock_raw", "pid1:proportional?"),
+        ] {
+            let result = mcp
+                .call(tool, json!({"target": "dui", "command": command}))
+                .await;
+            assert_eq!(result["isError"], false, "{mode}: {result}");
+        }
+        mcp.stop().await;
+        timeout(DEADLINE, fake).await.unwrap().unwrap();
+        assert_no_connection(&dms).await;
+    }
+}
+
+#[tokio::test]
+async fn startup_values_are_sent_before_initialize_in_order_with_optional_ports() {
+    let (dms, dms_port) = listener().await;
+    let (dui, dui_port) = listener().await;
+    let (other_dui, other_port) = listener().await;
+    let config = ConfigFile::new(json!({
+        "write_policy": {"mode": "denylist"},
+        "initial_values": [
+            {"target": "dms", "command": "selected module", "value": "2"},
+            {"target": "dui", "command": "pid1:proportional", "value": "0,25"},
+            {"target": "dui", "port": other_port, "command": "pid1:proportional", "value": "0.5"},
+            {"target": "dui", "command": "pid1:proportional", "value": "1e0"}
+        ]
+    }));
+    let (completed_tx, completed_rx) = oneshot::channel();
+    let fake = tokio::spawn(async move {
+        let mut dms_stream = accept_rci(&dms).await;
+        expect_rci_command(&mut dms_stream, "selected module=2").await;
+        // No later endpoint may connect while an earlier startup write awaits its reply.
+        assert_no_connection(&dui).await;
+        assert_no_connection(&other_dui).await;
+        dms_stream.get_mut().write_all(b"> ").await.unwrap();
+        let mut dui_stream = accept_rci(&dui).await;
+        expect_rci_command(&mut dui_stream, "pid1:proportional=0,25").await;
+        assert_no_connection(&other_dui).await;
+        dui_stream.get_mut().write_all(b"> ").await.unwrap();
+        let mut other_stream = accept_rci(&other_dui).await;
+        expect_rci_command(&mut other_stream, "pid1:proportional=0.5").await;
+        assert!(
+            timeout(
+                Duration::from_millis(100),
+                dui_stream.read_line(&mut String::new())
+            )
+            .await
+            .is_err(),
+            "startup sent a later write before the earlier reply"
+        );
+        other_stream.get_mut().write_all(b"> ").await.unwrap();
+        expect_rci_command(&mut dui_stream, "pid1:proportional=1e0").await;
+        dui_stream.get_mut().write_all(b"> ").await.unwrap();
+        completed_tx.send(()).unwrap();
+        expect_rci_command(&mut dui_stream, "pid1:proportional?").await;
+        dui_stream
+            .get_mut()
+            .write_all(b"pid1:proportional=1\r\n> ")
+            .await
+            .unwrap();
+        // No startup replay on initialize and no rollback when the MCP client exits.
+        expect_rci_closed(&mut dms_stream).await;
+        expect_rci_closed(&mut dui_stream).await;
+        expect_rci_closed(&mut other_stream).await;
+        assert_no_connection(&dms).await;
+        assert_no_connection(&dui).await;
+        assert_no_connection(&other_dui).await;
+    });
+    let mut args = config.args().to_vec();
+    args.extend([
+        "--allow-writes".into(),
+        "--dms-port".into(),
+        dms_port.to_string(),
+        "--dui-port".into(),
+        dui_port.to_string(),
+    ]);
+    let mut mcp = Mcp::spawn(binary(&args));
+    // Intentionally do not send any MCP input until every startup write is observed.
+    timeout(DEADLINE, completed_rx).await.unwrap().unwrap();
+    mcp.initialize().await;
+    let query = mcp
+        .call(
+            "digilock_query",
+            json!({"target": "dui", "command": "pid1:proportional"}),
+        )
+        .await;
+    assert_eq!(query["isError"], false, "{query}");
+    assert_eq!(query["structuredContent"]["port"], dui_port);
+    mcp.stop().await;
+    timeout(DEADLINE, fake).await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn invalid_config_is_rejected_before_any_tcp_connection() {
+    let (dms, dms_port) = listener().await;
+    let (dui, dui_port) = listener().await;
+    for contents in [
+        "{",
+        r#"{}"#,
+        r#"{"write_policy":{"mode":"invalid"}}"#,
+        r#"{"write_policy":{"mode":"denylist","limits":[{"target":"dui","command":"pid1:proportional","min":2,"max":1}]}}"#,
+        r#"{"write_policy":{"mode":"denylist"},"initial_values":[{"target":"dui","command":"pid1:proportional","value":1}]}"#,
+    ] {
+        let config = ConfigFile::raw(contents);
+        let mut args = config.args().to_vec();
+        args.extend([
+            "--allow-writes".into(),
+            "--dms-port".into(),
+            dms_port.to_string(),
+            "--dui-port".into(),
+            dui_port.to_string(),
+        ]);
+        let error = assert_startup_failure(binary(&args)).await;
+        assert!(
+            !error.is_empty(),
+            "no configuration diagnostic for {contents}"
+        );
+        assert_no_connection(&dms).await;
+        assert_no_connection(&dui).await;
+    }
+    let config = ConfigFile::new(json!({"write_policy": {"mode": "denylist"}}));
+    let args = config.args();
+    drop(config);
+    let error = assert_startup_failure(binary(&args)).await;
+    assert!(
+        error.contains(&args[1]),
+        "missing configuration path in error: {error}"
+    );
+    assert_no_connection(&dms).await;
+    assert_no_connection(&dui).await;
+}
+
+#[tokio::test]
+async fn invalid_later_startup_value_prevents_even_the_first_tcp_connection() {
+    let (dms, dms_port) = listener().await;
+    let (dui, dui_port) = listener().await;
+    for invalid in [
+        json!({"target": "dui", "command": "pid2:proportional", "value": "0.5"}),
+        json!({"target": "dui", "command": "pid1:proportional", "value": "2"}),
+        json!({"target": "dui", "command": "pid1:lock:enable", "value": "true"}),
+        json!({"target": "dui", "command": "pid1:lock:enable", "value": "0"}),
+        json!({"target": "dui", "command": "scope:graph", "value": "1"}),
+        json!({"target": "dui", "port": 0, "command": "pid1:proportional", "value": "0.5"}),
+        json!({"target": "dui", "port": dms_port, "command": "pid1:proportional", "value": "0.5"}),
+        json!({"target": "dms", "port": dui_port, "command": "selected module", "value": "2"}),
+        json!({"target": "dui", "command": "pid1:proportional?", "value": "0.5"}),
+        json!({"target": "dui", "command": "pid1:proportional", "value": "0.5\r\nprogram:exit=true"}),
+    ] {
+        let config = ConfigFile::new(json!({
+            "write_policy": {
+                "mode": "denylist",
+                "commands": [{"target": "dui", "command": "pid2:proportional"}],
+                "limits": [
+                    {"target": "dui", "command": "pid1:proportional", "min": 0, "max": 1},
+                    {"target": "dui", "command": "pid1:lock:enable", "allowed_values": ["false"]}
+                ]
+            },
+            "initial_values": [
+                {"target": "dms", "command": "selected module", "value": "1"},
+                invalid
+            ]
+        }));
+        let mut args = config.args().to_vec();
+        args.extend([
+            "--allow-writes".into(),
+            "--dms-port".into(),
+            dms_port.to_string(),
+            "--dui-port".into(),
+            dui_port.to_string(),
+        ]);
+        let error = assert_startup_failure(binary(&args)).await;
+        assert!(error.contains("initial_values[1]"), "{invalid}: {error}");
+        assert_no_connection(&dms).await;
+        assert_no_connection(&dui).await;
+    }
+}
+
+#[tokio::test]
+async fn startup_requires_global_write_opt_in_before_connecting() {
+    let (dms, dms_port) = listener().await;
+    let (dui, dui_port) = listener().await;
+    let config = ConfigFile::new(json!({
+        "write_policy": {"mode": "allowlist", "commands": [
+            {"target": "dui", "command": "pid1:proportional"}
+        ]},
+        "initial_values": [{"target": "dui", "command": "pid1:proportional", "value": "0.5"}]
+    }));
+    let mut args = config.args().to_vec();
+    args.extend([
+        "--dms-port".into(),
+        dms_port.to_string(),
+        "--dui-port".into(),
+        dui_port.to_string(),
+    ]);
+    let error = assert_startup_failure(binary(&args)).await;
+    assert!(error.contains("initial_values[0]"), "{error}");
+    assert!(error.contains("--allow-writes"), "{error}");
+    assert_no_connection(&dms).await;
+    assert_no_connection(&dui).await;
+}
+
+#[tokio::test]
+async fn startup_device_error_aborts_without_later_writes_replay_or_rollback() {
+    let (dms, dms_port) = listener().await;
+    let (dui, port) = listener().await;
+    let (other_dui, other_port) = listener().await;
+    let config = ConfigFile::new(json!({
+        "write_policy": {"mode": "denylist"},
+        "initial_values": [
+            {"target": "dui", "command": "pid1:proportional", "value": "0.25"},
+            {"target": "dui", "command": "pid1:proportional", "value": "0.5"},
+            {"target": "dui", "command": "pid1:proportional", "value": "0.75"},
+            {"target": "dui", "port": other_port, "command": "pid1:proportional", "value": "1"}
+        ]
+    }));
+    let fake = tokio::spawn(async move {
+        scripted_rci(
+            dui,
+            &[
+                ("pid1:proportional=0.25", "> "),
+                (
+                    "pid1:proportional=0.5",
+                    "%% Error: rejected startup value\r\n> ",
+                ),
+            ],
+        )
+        .await;
+    });
+    let mut args = config.args().to_vec();
+    args.extend([
+        "--allow-writes".into(),
+        "--dms-port".into(),
+        dms_port.to_string(),
+        "--dui-port".into(),
+        port.to_string(),
+    ]);
+    let error = assert_startup_failure(binary(&args)).await;
+    assert!(error.contains("initial_values[1]"), "{error}");
+    assert!(
+        error.contains("%% Error: rejected startup value"),
+        "{error}"
+    );
+    assert!(
+        error.contains("earlier writes may already have taken effect"),
+        "{error}"
+    );
+    assert!(error.contains("no commands were replayed"), "{error}");
+    timeout(DEADLINE, fake).await.unwrap().unwrap();
+    assert_no_connection(&other_dui).await;
+    assert_no_connection(&dms).await;
 }
 
 #[cfg(unix)]
