@@ -1,0 +1,2250 @@
+[
+  {
+    "target": "dms",
+    "command": "access control",
+    "query": false,
+    "set": true,
+    "data_type": "enum",
+    "description": "access control of the commands"
+  },
+  {
+    "target": "dms",
+    "command": "commandlist",
+    "query": true,
+    "set": false,
+    "data_type": "array",
+    "description": "displays all available commands"
+  },
+  {
+    "target": "dms",
+    "command": "echo",
+    "query": false,
+    "set": true,
+    "data_type": "boolean",
+    "description": "echoes the sent characters"
+  },
+  {
+    "target": "dms",
+    "command": "messages waiting",
+    "query": true,
+    "set": false,
+    "data_type": "numeric",
+    "description": "messages waiting in the command queue"
+  },
+  {
+    "target": "dms",
+    "command": "module:connect",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "establish a connection to the selected DigiLock module"
+  },
+  {
+    "target": "dms",
+    "command": "module:show",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "show user interface of active DigiLock module"
+  },
+  {
+    "target": "dms",
+    "command": "modules:connection status",
+    "query": true,
+    "set": false,
+    "data_type": "array",
+    "description": "list of connection statuses of modules"
+  },
+  {
+    "target": "dms",
+    "command": "modules:names",
+    "query": true,
+    "set": false,
+    "data_type": "array",
+    "description": "list of module names"
+  },
+  {
+    "target": "dms",
+    "command": "modules:port numbers",
+    "query": true,
+    "set": false,
+    "data_type": "array",
+    "description": "list of port numbers of modules"
+  },
+  {
+    "target": "dms",
+    "command": "modules:serial numbers",
+    "query": true,
+    "set": false,
+    "data_type": "array",
+    "description": "list of serial numbers of modules"
+  },
+  {
+    "target": "dms",
+    "command": "number connected modules",
+    "query": true,
+    "set": false,
+    "data_type": "numeric",
+    "description": "number of DigiLock modules with a connection established"
+  },
+  {
+    "target": "dms",
+    "command": "number of modules",
+    "query": true,
+    "set": false,
+    "data_type": "numeric",
+    "description": "number of DigiLock modules connected to the computer"
+  },
+  {
+    "target": "dms",
+    "command": "program:exit",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "stops the application"
+  },
+  {
+    "target": "dms",
+    "command": "program:ip address",
+    "query": true,
+    "set": true,
+    "data_type": "string",
+    "description": "ip address of this computer"
+  },
+  {
+    "target": "dms",
+    "command": "program:port number",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "port number of the module server"
+  },
+  {
+    "target": "dms",
+    "command": "program:update module list",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "search for connected DigiLock modules"
+  },
+  {
+    "target": "dms",
+    "command": "selected module",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "index of the currently active module"
+  },
+  {
+    "target": "dui",
+    "command": "access control",
+    "query": false,
+    "set": true,
+    "data_type": "enum",
+    "description": "access control of the commands"
+  },
+  {
+    "target": "dui",
+    "command": "analog:lock:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "activate the analog controller"
+  },
+  {
+    "target": "dui",
+    "command": "analog:proportional",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "proportional gain of the analog controller"
+  },
+  {
+    "target": "dui",
+    "command": "analog:sign",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "sign of analog controller"
+  },
+  {
+    "target": "dui",
+    "command": "analog:slope",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "slope of analog controller"
+  },
+  {
+    "target": "dui",
+    "command": "analog:tab",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": ""
+  },
+  {
+    "target": "dui",
+    "command": "autolock:controller:analog",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "activate the analog controller for autolock"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:controller:pid1",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "activate PID 1 for autolock"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:controller:pid2",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "activate PID 2 for autolock"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:cursor:snap",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "cursor snaps to the setpoint"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:cursor:track",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "cursor tracks the trace location"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:display:active trace",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "trace in the autolock display to which the lock cursor snaps"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:display:ch1:channel",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "channel 1 of the autolock graph"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:display:ch1:mean",
+    "query": true,
+    "set": false,
+    "data_type": "numeric",
+    "description": "mean value of CH 1 data"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:display:ch1:overload",
+    "query": true,
+    "set": false,
+    "data_type": "boolean",
+    "description": "CH 1 overload"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:display:ch1:rms",
+    "query": true,
+    "set": false,
+    "data_type": "numeric",
+    "description": "root mean square value of CH 1 data"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:display:ch1:show",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "show/hide CH 1 trace"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:display:ch2:channel",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "channel 2 of the autolock graph"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:display:ch2:mean",
+    "query": true,
+    "set": false,
+    "data_type": "numeric",
+    "description": "mean value of CH 2 data"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:display:ch2:overload",
+    "query": true,
+    "set": false,
+    "data_type": "boolean",
+    "description": "CH 2 overload"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:display:ch2:rms",
+    "query": true,
+    "set": false,
+    "data_type": "numeric",
+    "description": "root mean square value of CH 2 data"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:display:ch2:show",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "show/hide captured scan trace"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:display:chx:channel",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "x-channel of the autolock graph"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:display:cursor index",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "index of the cursor (1...1000) for selection of the lockpoint"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:display:graph",
+    "query": true,
+    "set": false,
+    "data_type": "2D array",
+    "description": "autolock data"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:display:hold",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "freeze traces"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "activation of the autolock module"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:input",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "input channel of the autolock module"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:input:treataslipdh",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "treat the input as if it was an LI- or PDH-signal although it is not generated by the internal LI/PDH-modules"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:lock:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "lock the controllers configured for autolock"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:lock:hold",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "hold the autolock controllers"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:lock:mode",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "operating mode of the autolock module"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:lock:strategy",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "strategy the autolock module uses in full automatic locking mode"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:relock:amplitude",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "relock scan amplitude"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:relock:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "turn the relock option on/off"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:relock:frequency",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "relock scan frequency"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:relock:output",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "output channel that starts to scan"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:setpoint",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "setpoint of the autolock module"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:smart:engage",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "intelligent detection of a slope or extremum to engage a proper lock"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:smart:setpoint",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "automatic detection of the setpoint"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:spectrum",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "display channel for the autolock graph"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:spectrum:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "automatic setting of the spectrum channel"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:tab",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": ""
+  },
+  {
+    "target": "dui",
+    "command": "autolock:window:channel",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "detection channel for supervision limits"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:window:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "turn the lock window option on/off"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:window:maxin",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "controller continous working below this signal level"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:window:maxout",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "controller halts above this signal level"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:window:minin",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "controller continous working above this signal level"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:window:minout",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "controller halts below this signal level"
+  },
+  {
+    "target": "dui",
+    "command": "autolock:window:reset:delay",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "time to wait from triggering the window to reset/relock"
+  },
+  {
+    "target": "dui",
+    "command": "aux in:invert",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "inversion of the aux in signal"
+  },
+  {
+    "target": "dui",
+    "command": "aux in:low pass:bypass",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "bypass the low-pass filter"
+  },
+  {
+    "target": "dui",
+    "command": "aux in:low pass:frequency",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "cut-off frequency of the low-pass filter"
+  },
+  {
+    "target": "dui",
+    "command": "aux in:low pass:order",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "order of the low-pass filter"
+  },
+  {
+    "target": "dui",
+    "command": "commandlist",
+    "query": true,
+    "set": false,
+    "data_type": "array",
+    "description": "displays all available commands"
+  },
+  {
+    "target": "dui",
+    "command": "controller:tab",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": ""
+  },
+  {
+    "target": "dui",
+    "command": "dio out:function",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "function of the DIO output"
+  },
+  {
+    "target": "dui",
+    "command": "dio out:manual state",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "manual state of the DIO output"
+  },
+  {
+    "target": "dui",
+    "command": "display:sampling",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "turn the sampling on/off"
+  },
+  {
+    "target": "dui",
+    "command": "display:update rate",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "display update rate"
+  },
+  {
+    "target": "dui",
+    "command": "display:view",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "select the corresponding display view"
+  },
+  {
+    "target": "dui",
+    "command": "echo",
+    "query": false,
+    "set": true,
+    "data_type": "boolean",
+    "description": "echos the sent characters"
+  },
+  {
+    "target": "dui",
+    "command": "function:view",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "select the corresponding function view"
+  },
+  {
+    "target": "dui",
+    "command": "li/pdh:aio1outselection",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "output LI/PDH-signal on AIO1out channel"
+  },
+  {
+    "target": "dui",
+    "command": "li/pdh:modulation:signal type",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "signal type of the modulation signal for LI and PDH"
+  },
+  {
+    "target": "dui",
+    "command": "li/pdh:tab",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": ""
+  },
+  {
+    "target": "dui",
+    "command": "li:first filter notch",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "frequency of the first filter notch in fractions of the modulation frequency"
+  },
+  {
+    "target": "dui",
+    "command": "li:input",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "input channel of LI-module"
+  },
+  {
+    "target": "dui",
+    "command": "li:modulation:amplitude",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "modulation amplitude"
+  },
+  {
+    "target": "dui",
+    "command": "li:modulation:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "turn the modulation on/off"
+  },
+  {
+    "target": "dui",
+    "command": "li:modulation:frequency act",
+    "query": true,
+    "set": false,
+    "data_type": "numeric",
+    "description": "actual modulation frequency"
+  },
+  {
+    "target": "dui",
+    "command": "li:modulation:frequency set",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "set modulation frequency"
+  },
+  {
+    "target": "dui",
+    "command": "li:modulation:output",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "modulation output channel"
+  },
+  {
+    "target": "dui",
+    "command": "li:offset",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "offset value that is subtracted from the original LI-signal"
+  },
+  {
+    "target": "dui",
+    "command": "li:phase adjust",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "automatic adjustment of phase shift"
+  },
+  {
+    "target": "dui",
+    "command": "li:phase shift",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "phase shift between modulation and reference signal"
+  },
+  {
+    "target": "dui",
+    "command": "main in:gain",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "analog gain value"
+  },
+  {
+    "target": "dui",
+    "command": "main in:high pass:bypass",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "bypass the high-pass filter"
+  },
+  {
+    "target": "dui",
+    "command": "main in:high pass:frequency",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "cut-off frequency of the high-pass filter"
+  },
+  {
+    "target": "dui",
+    "command": "main in:high pass:order",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "order of the high-pass filter"
+  },
+  {
+    "target": "dui",
+    "command": "main in:input offset",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "input offset subtraced from <Main in>"
+  },
+  {
+    "target": "dui",
+    "command": "main in:invert",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "inversion of the main in signal"
+  },
+  {
+    "target": "dui",
+    "command": "main in:low pass:bypass",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "bypass the low-pass filter"
+  },
+  {
+    "target": "dui",
+    "command": "main in:low pass:frequency",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "cut-off frequency of the low-pass filter"
+  },
+  {
+    "target": "dui",
+    "command": "main in:low pass:order",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "order of the low-pass filter"
+  },
+  {
+    "target": "dui",
+    "command": "messages waiting",
+    "query": true,
+    "set": false,
+    "data_type": "numeric",
+    "description": "messages waiting in the command queue"
+  },
+  {
+    "target": "dui",
+    "command": "offset:output",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "output destination for DC-offset"
+  },
+  {
+    "target": "dui",
+    "command": "offset:value",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "DC-offset voltage of the selected output channel"
+  },
+  {
+    "target": "dui",
+    "command": "pdh:input",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "input channel of PDH-module"
+  },
+  {
+    "target": "dui",
+    "command": "pdh:modulation:amplitude",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "modulation amplitude"
+  },
+  {
+    "target": "dui",
+    "command": "pdh:modulation:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "turn the modulation on/off"
+  },
+  {
+    "target": "dui",
+    "command": "pdh:modulation:frequency set",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "set modulation frequency"
+  },
+  {
+    "target": "dui",
+    "command": "pdh:modulation:output",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "modulation output channel"
+  },
+  {
+    "target": "dui",
+    "command": "pdh:offset",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "offset value that is subtracted from the original PDH-signal"
+  },
+  {
+    "target": "dui",
+    "command": "pdh:phase adjust",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "automatic adjustment of phase shift"
+  },
+  {
+    "target": "dui",
+    "command": "pdh:phase shift",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "phase shift between modulation and reference signal"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:differential",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "differential gain of PID 1"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:gain",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "overall gain of PID 1"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:hold:state",
+    "query": true,
+    "set": false,
+    "data_type": "boolean",
+    "description": "hold status of the PID 1 controller"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:input",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "input channel of PID 1"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:integral",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "integral gain of PID 1"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:integral:cutoff:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "activation of I cut-off"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:integral:cutoff:frequency",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "cut-off frequency for integral gain"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:limit enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "activation of output limits"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:limit:max",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "maximum relative output level of PID 1"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:limit:min",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "minimum relative output level of PID 1"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:lock:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "lock the PID1 controller"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:lock:hold",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "hold PID1 controller"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:lock:state",
+    "query": true,
+    "set": false,
+    "data_type": "boolean",
+    "description": "lock status of the PID 1 controller"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:output",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "output channel of PID 1"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:proportional",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "proportional gain of PID 1"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:relock:amplitude",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "relock scan amplitude"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:relock:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "turn the relock option on/off"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:relock:frequency",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "relock scan frequency"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:relock:output",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "output channel that starts to scan"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:setpoint",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "setpoint of PID 1"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:sign",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "sign of PID 1"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:slope",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "slope to lock to for PID 1"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:regulating state",
+    "query": true,
+    "set": false,
+    "data_type": "boolean",
+    "description": "regulating status of the PID 1 controller"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:tab",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": ""
+  },
+  {
+    "target": "dui",
+    "command": "pid1:turnoff reset:autolock",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "when turning off PID 1 in autolock mode a reset is performed"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:turnoff reset:manual",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "when turning off PID 1 in manual mode a reset is performed"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:window:channel",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "detection channel for supervision limits"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:window:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "turn the lock window option on/off"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:window:maxin",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "controller continous working below this signal level"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:window:maxout",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "controller halts above this signal level"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:window:minin",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "controller continous working above this signal level"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:window:minout",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "controller halts below this signal level"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:window:reset:delay",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "time to wait from triggering the window to reset/relock"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:window:reset:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "reset the PID if the window is triggered"
+  },
+  {
+    "target": "dui",
+    "command": "pid1:window:reset:rate",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "rate at which the PID output is reset"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:differential",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "differential gain of PID 2"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:gain",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "overall gain of PID 2"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:hold:state",
+    "query": true,
+    "set": false,
+    "data_type": "boolean",
+    "description": "hold status of the PID 1 controller"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:input",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "input channel of PID 2"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:integral",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "integral gain of PID 2"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:limit:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "activation of output limits"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:limit:max",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "maximum relative output level of PID 2"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:limit:min",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "minimum relative output level of PID 2"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:lock:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "lock the PID2 controller"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:lock:hold",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "hold PID2 controller"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:lock:state",
+    "query": true,
+    "set": false,
+    "data_type": "boolean",
+    "description": "lock status of the PID 2 controller"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:low pass:bypass",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "bypass the low-pass filter"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:low pass:frequency",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "cut-off frequency of the low-pass filter"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:low pass:order",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "order of the low-pass filter"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:output",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "output channel of PID 2"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:proportional",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "proportional gain of PID 2"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:relock:amplitude",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "relock scan amplitude"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:relock:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "turn the relock option on/off"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:relock:frequency",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "relock scan frequency"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:relock:output",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "output channel that starts to scan"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:setpoint",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "setpoint of PID 2"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:sign",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "sign of PID 2"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:slope",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "slope to lock to for PID 2"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:regulating state",
+    "query": true,
+    "set": false,
+    "data_type": "boolean",
+    "description": "regulating status of the PID 2 controller"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:tab",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": ""
+  },
+  {
+    "target": "dui",
+    "command": "pid2:turnoff reset:autolock",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "when turning off PID 2 in autolock mode a reset is performed"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:turnoff reset:manual",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "when turning off PID 2 in manual mode a reset is performed"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:window:channel",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "detection channel for supervision limits"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:window:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "turn the lock window option on/off"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:window:maxin",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "controller continous working below this signal level"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:window:maxout",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "controller halts above this signal level"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:window:minin",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "controller continous working above this signal level"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:window:minout",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "controller halts below this signal level"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:window:reset:delay",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "time to wait from triggering the window to reset/relock"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:window:reset:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "reset the PID if the window is triggered"
+  },
+  {
+    "target": "dui",
+    "command": "pid2:window:reset:rate",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "rate at which the PID output is reset"
+  },
+  {
+    "target": "dui",
+    "command": "pid:scanlockbutton",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "function of the scan-lock button"
+  },
+  {
+    "target": "dui",
+    "command": "program:disable popup windows",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "disable all popup windows during runtime"
+  },
+  {
+    "target": "dui",
+    "command": "program:exit",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": ""
+  },
+  {
+    "target": "dui",
+    "command": "program:sample when hidden",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "set the sampling option when the frontend is hidden"
+  },
+  {
+    "target": "dui",
+    "command": "program:status bar",
+    "query": true,
+    "set": false,
+    "data_type": "numeric",
+    "description": "display of the progress of a procedure"
+  },
+  {
+    "target": "dui",
+    "command": "program:system message",
+    "query": true,
+    "set": true,
+    "data_type": "string",
+    "description": "display of system messages"
+  },
+  {
+    "target": "dui",
+    "command": "response:graph",
+    "query": true,
+    "set": true,
+    "data_type": "2D array",
+    "description": "response data"
+  },
+  {
+    "target": "dui",
+    "command": "response:input",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "response signal input"
+  },
+  {
+    "target": "dui",
+    "command": "response:modulation:amplitude",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "modulation amplitude"
+  },
+  {
+    "target": "dui",
+    "command": "response:modulation:input:overload",
+    "query": true,
+    "set": false,
+    "data_type": "boolean",
+    "description": "input channel overload"
+  },
+  {
+    "target": "dui",
+    "command": "response:modulation:output",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "stimulus signal output"
+  },
+  {
+    "target": "dui",
+    "command": "response:modulation:output:overload",
+    "query": true,
+    "set": false,
+    "data_type": "boolean",
+    "description": "output channel overload"
+  },
+  {
+    "target": "dui",
+    "command": "response:show:reference",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "show/hide the reference tracks in the graph"
+  },
+  {
+    "target": "dui",
+    "command": "response:show:time signal",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "show/hide the response signal on the scope"
+  },
+  {
+    "target": "dui",
+    "command": "response:start",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "start the measurement"
+  },
+  {
+    "target": "dui",
+    "command": "response:sweep:averaging",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "# of averaging points per measurement frequency"
+  },
+  {
+    "target": "dui",
+    "command": "response:sweep:samples",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "# of samples within the frequency sweep range"
+  },
+  {
+    "target": "dui",
+    "command": "response:sweep:scaling",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "mode of spreading the measurement points across the frequency sweep range"
+  },
+  {
+    "target": "dui",
+    "command": "response:sweep:start",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "start frequency of the sweep"
+  },
+  {
+    "target": "dui",
+    "command": "response:sweep:stop",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "stop frequency of the sweep"
+  },
+  {
+    "target": "dui",
+    "command": "scan:amplitude",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "scan amplitude"
+  },
+  {
+    "target": "dui",
+    "command": "scan:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "turn scan control on / off"
+  },
+  {
+    "target": "dui",
+    "command": "scan:frequency",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "scan frequency"
+  },
+  {
+    "target": "dui",
+    "command": "scan:output",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "output destination of scan signal"
+  },
+  {
+    "target": "dui",
+    "command": "scan:signal type",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "waveform type of output signal"
+  },
+  {
+    "target": "dui",
+    "command": "scope:average:number",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "# of averaged consecutive traces of one scope channel"
+  },
+  {
+    "target": "dui",
+    "command": "scope:ch1:average:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "activate trace averaging for CH 1"
+  },
+  {
+    "target": "dui",
+    "command": "scope:ch1:channel",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "input signal to CH 1 of the scope"
+  },
+  {
+    "target": "dui",
+    "command": "scope:ch1:mean",
+    "query": true,
+    "set": false,
+    "data_type": "numeric",
+    "description": "mean value of CH 1 data"
+  },
+  {
+    "target": "dui",
+    "command": "scope:ch1:overload",
+    "query": true,
+    "set": false,
+    "data_type": "boolean",
+    "description": "CH 1 overload"
+  },
+  {
+    "target": "dui",
+    "command": "scope:ch1:rms",
+    "query": true,
+    "set": false,
+    "data_type": "numeric",
+    "description": "root mean square value of CH 1 data"
+  },
+  {
+    "target": "dui",
+    "command": "scope:ch1:show",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "show/hide CH 1 trace"
+  },
+  {
+    "target": "dui",
+    "command": "scope:ch1:smooth:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "activate smoothing for CH 1 trace"
+  },
+  {
+    "target": "dui",
+    "command": "scope:ch2:average:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "activate trace averaging for CH 2"
+  },
+  {
+    "target": "dui",
+    "command": "scope:ch2:channel",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "input signal to CH 2 of the scope"
+  },
+  {
+    "target": "dui",
+    "command": "scope:ch2:mean",
+    "query": true,
+    "set": false,
+    "data_type": "numeric",
+    "description": "mean value of CH 2 data"
+  },
+  {
+    "target": "dui",
+    "command": "scope:ch2:overload",
+    "query": true,
+    "set": false,
+    "data_type": "boolean",
+    "description": "CH 2 overload"
+  },
+  {
+    "target": "dui",
+    "command": "scope:ch2:rms",
+    "query": true,
+    "set": false,
+    "data_type": "numeric",
+    "description": "root mean square value of CH 2 data"
+  },
+  {
+    "target": "dui",
+    "command": "scope:ch2:show",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "show/hide CH 2 trace"
+  },
+  {
+    "target": "dui",
+    "command": "scope:ch2:smooth:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "activate smoothing for CH 2 trace"
+  },
+  {
+    "target": "dui",
+    "command": "scope:chx:channel",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "input signal to the x-channel in the xy-mode"
+  },
+  {
+    "target": "dui",
+    "command": "scope:graph",
+    "query": true,
+    "set": false,
+    "data_type": "2D array",
+    "description": "scope data"
+  },
+  {
+    "target": "dui",
+    "command": "scope:smooth:number",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "# of averaged consecutive data points in one scope trace"
+  },
+  {
+    "target": "dui",
+    "command": "scope:timescale",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "time span"
+  },
+  {
+    "target": "dui",
+    "command": "scope:xymode",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "activate the xy-mode"
+  },
+  {
+    "target": "dui",
+    "command": "settings:tab",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": ""
+  },
+  {
+    "target": "dui",
+    "command": "simulation:frequency:start",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "minimum display frequency"
+  },
+  {
+    "target": "dui",
+    "command": "simulation:frequency:stop",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "maximum display frequency"
+  },
+  {
+    "target": "dui",
+    "command": "simulation:frequency:unit",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "units used on the frequency axis"
+  },
+  {
+    "target": "dui",
+    "command": "simulation:graph",
+    "query": true,
+    "set": false,
+    "data_type": "2D array",
+    "description": "simulation data"
+  },
+  {
+    "target": "dui",
+    "command": "simulation:includecontroller",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "include controllers in transfer function calculation"
+  },
+  {
+    "target": "dui",
+    "command": "simulation:includeconverters",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "include ADC- and DAC-delays in transfer function calculation"
+  },
+  {
+    "target": "dui",
+    "command": "simulation:includeinputfilter",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "include input filter in transfer function calculation"
+  },
+  {
+    "target": "dui",
+    "command": "simulation:includelipdh",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "include LI or PDH in transfer function calculation"
+  },
+  {
+    "target": "dui",
+    "command": "simulation:pid:differential",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "derivative gain"
+  },
+  {
+    "target": "dui",
+    "command": "simulation:pid:gain",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "overall gain"
+  },
+  {
+    "target": "dui",
+    "command": "simulation:pid:get parameters",
+    "query": false,
+    "set": true,
+    "data_type": "boolean",
+    "description": "get parameters of the selected PID controller"
+  },
+  {
+    "target": "dui",
+    "command": "simulation:pid:input",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "input channel for the selected PID"
+  },
+  {
+    "target": "dui",
+    "command": "simulation:pid:integral",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "integral gain"
+  },
+  {
+    "target": "dui",
+    "command": "simulation:pid:integral:cutoff:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "activate the I cut-off"
+  },
+  {
+    "target": "dui",
+    "command": "simulation:pid:integral:cutoff:frequency",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "cut-off frequency for integral gain"
+  },
+  {
+    "target": "dui",
+    "command": "simulation:pid:output",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "output channel of the selected controller"
+  },
+  {
+    "target": "dui",
+    "command": "simulation:pid:proportional",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "proportional gain"
+  },
+  {
+    "target": "dui",
+    "command": "simulation:pid:send parameters",
+    "query": false,
+    "set": true,
+    "data_type": "boolean",
+    "description": "send the chosen parameters to the selected PID controller"
+  },
+  {
+    "target": "dui",
+    "command": "simulation:selected pid",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "selected PID controller"
+  },
+  {
+    "target": "dui",
+    "command": "spectrum:average:number",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "# of averaged consecutive traces of one spectrum analysis channel"
+  },
+  {
+    "target": "dui",
+    "command": "spectrum:ch1:average:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "activate trace averaging for CH 1"
+  },
+  {
+    "target": "dui",
+    "command": "spectrum:ch1:channel",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "input signal to CH 1 of the spectrum analyzer"
+  },
+  {
+    "target": "dui",
+    "command": "spectrum:ch1:hold",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "freeze CH 1 trace"
+  },
+  {
+    "target": "dui",
+    "command": "spectrum:ch1:mean",
+    "query": true,
+    "set": false,
+    "data_type": "numeric",
+    "description": "mean value of CH 1 data"
+  },
+  {
+    "target": "dui",
+    "command": "spectrum:ch1:overload",
+    "query": true,
+    "set": false,
+    "data_type": "boolean",
+    "description": "CH 1 overload"
+  },
+  {
+    "target": "dui",
+    "command": "spectrum:ch1:rms",
+    "query": true,
+    "set": false,
+    "data_type": "numeric",
+    "description": "root mean square value of CH 1 data"
+  },
+  {
+    "target": "dui",
+    "command": "spectrum:ch1:show",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "show/hide CH 1 trace"
+  },
+  {
+    "target": "dui",
+    "command": "spectrum:ch1:show dc",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "show the DC-component of the frequency spectrum for CH 1"
+  },
+  {
+    "target": "dui",
+    "command": "spectrum:ch1:smooth:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "activate smoothing for CH 1 trace"
+  },
+  {
+    "target": "dui",
+    "command": "spectrum:ch2:average:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "activate trace averaging for CH 2"
+  },
+  {
+    "target": "dui",
+    "command": "spectrum:ch2:channel",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "input signal to CH 2 of the spectrum analyzer"
+  },
+  {
+    "target": "dui",
+    "command": "spectrum:ch2:hold",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "freeze CH 2 trace"
+  },
+  {
+    "target": "dui",
+    "command": "spectrum:ch2:mean",
+    "query": true,
+    "set": false,
+    "data_type": "numeric",
+    "description": "mean value of CH 2 data"
+  },
+  {
+    "target": "dui",
+    "command": "spectrum:ch2:overload",
+    "query": true,
+    "set": false,
+    "data_type": "boolean",
+    "description": "CH 2 overload"
+  },
+  {
+    "target": "dui",
+    "command": "spectrum:ch2:rms",
+    "query": true,
+    "set": false,
+    "data_type": "numeric",
+    "description": "root mean square value of CH 2 data"
+  },
+  {
+    "target": "dui",
+    "command": "spectrum:ch2:show",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "show/hide CH 2 trace"
+  },
+  {
+    "target": "dui",
+    "command": "spectrum:ch2:show dc",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "show the DC-component of the frequency spectrum for CH 2"
+  },
+  {
+    "target": "dui",
+    "command": "spectrum:ch2:smooth:enable",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "activate smoothing for CH 2 trace"
+  },
+  {
+    "target": "dui",
+    "command": "spectrum:frequency scale",
+    "query": true,
+    "set": true,
+    "data_type": "enum",
+    "description": "frequency span"
+  },
+  {
+    "target": "dui",
+    "command": "spectrum:graph",
+    "query": true,
+    "set": false,
+    "data_type": "2D array",
+    "description": "spectrum data"
+  },
+  {
+    "target": "dui",
+    "command": "spectrum:smooth:number",
+    "query": true,
+    "set": true,
+    "data_type": "numeric",
+    "description": "# of averaged consecutive data points in one spectrum analysis trace"
+  },
+  {
+    "target": "dui",
+    "command": "visibility:li/pdh",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "show/hide lock-in and PDH module"
+  },
+  {
+    "target": "dui",
+    "command": "visibility:lock",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "show/hide lock navigation button"
+  },
+  {
+    "target": "dui",
+    "command": "visibility:lock",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "show/hide advanced AutoLock controls"
+  },
+  {
+    "target": "dui",
+    "command": "visibility:offset",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "show/hide offset module"
+  },
+  {
+    "target": "dui",
+    "command": "visibility:pid",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "show/hide autolock and PID module"
+  },
+  {
+    "target": "dui",
+    "command": "visibility:response",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "show/hide response navigation button"
+  },
+  {
+    "target": "dui",
+    "command": "visibility:scan",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "show/hide scan module"
+  },
+  {
+    "target": "dui",
+    "command": "visibility:settings",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "show/hide settings navigation button"
+  },
+  {
+    "target": "dui",
+    "command": "visibility:simulation",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "show/hide simulation navigation button"
+  },
+  {
+    "target": "dui",
+    "command": "visibility:system",
+    "query": true,
+    "set": true,
+    "data_type": "boolean",
+    "description": "show/hide system navigation button"
+  }
+]
