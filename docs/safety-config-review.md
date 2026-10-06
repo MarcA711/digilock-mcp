@@ -8,13 +8,13 @@ Use this checklist after every change to the operator JSON configuration, MCP la
 
 The command names and descriptions below come from [the bundled RCI catalog](commands.json). The current enforcement is implemented in [`src/policy.rs`](../src/policy.rs) and [`src/server.rs`](../src/server.rs). All command families in the findings below use target `dui`.
 
-The scan amplitude is peak-to-peak. The manual text previously extracted from [the DigiLock manual](Digilock_Manual.pdf), sections 8.2.1.1, 8.2.1.7, and 8.2.1.8, also describes scan, LI, and PDH modulation amplitudes as peak-to-peak. However, exact output summation/routing, the reference and clipping location of PID-relative limits, and relock amplitude/center semantics were **not verified in this audit**. Consult the bundled manuals and the actual software/firmware before relying on a combined-output formula. This list is not an exhaustive assessment of every firmware-specific command or hardware failure mode.
+The bundled [DigiLock application manual](Digilock_Manual.pdf), §§8.2.1.1, 8.2.1.7, and 8.2.1.8, describes scan, LI, and PDH modulation amplitudes as **peak-to-peak**. Response/network-analyzer stimulus amplitude is also explicitly **peak-to-peak**, verified in §8.2.3, printed p. 30 (PDF p. 34). PID limits are described as relative to the initial output offset (§8.2.1.4, printed p. 23). These conventions do not verify actual output summation/routing, clipping location and applicability, response-stimulus scaling through the selected output and actuator, or relock amplitude/center semantics. Those combined-output details remain **unverified for the apparatus**. Consult the manuals and actual software/firmware before relying on a combined-output formula. This list is not an exhaustive assessment of every firmware-specific command or hardware failure mode.
 
 Here, a "bypass" includes an otherwise authorized command that changes hardware indirectly or produces an unsafe combined result. It does not necessarily bypass command authorization itself.
 
 ## What the wrapper currently enforces
 
-- Writes require explicit `--allow-writes` or its environment equivalent.
+- Writes require `--allow-writes` or its environment equivalent, `DIGILOCK_ALLOW_WRITES=true`. An inherited environment value can enable writes even when the flag is omitted. For explicitly read-only review, omit the flag and set `DIGILOCK_ALLOW_WRITES=false` in the launched process's environment.
 - With a configuration file loaded, sets and raw assignments obey its allowlist/denylist and per-command value limits. Startup assignments obey the same checks.
 - Optional `write_policy.scan_range` checks only changes to `offset:value` and `scan:amplitude`, using a fresh counterpart query and:
 
@@ -35,7 +35,7 @@ Perform document/configuration review first. Do not exercise a dangerous bypass 
 
 - [ ] Record the configuration revision, wrapper version, DMS/DUI software version, module identity, host/ports, and wiring being reviewed.
 - [ ] Define the actual safe voltage or other physical limits for **each output and attached actuator**, including units, external scaling, polarity, and any required margin.
-- [ ] Confirm the MCP launch loads the intended configuration file and that clients cannot modify the file or launch arguments. Restart is required to load edits; review startup effects before restarting.
+- [ ] Confirm the MCP launch loads the intended configuration file and that clients cannot modify the file or launch arguments. Inspect the effective environment, especially inherited `DIGILOCK_ALLOW_WRITES`; absence of the flag alone does not ensure read-only operation. Restart is required to load edits; review startup effects before restarting.
 - [ ] Identify every writable command. In allowlist mode this starts with `commands`; in denylist mode it includes **all commands not listed**, including firmware-specific ones. A `limits` entry neither grants allowlist permission nor implicitly denies other commands.
 - [ ] Review every permitted value, not just the current value. For each permitted command, ask whether it can change routing, activate stored settings, disable protection, reset an output, or update another parameter indirectly.
 - [ ] Review all findings below. For each, record either that the relevant actions are denied, or the independently verified mitigation and evidence. "Not used normally" is not a mitigation if the action is allowed.
@@ -143,7 +143,7 @@ The spelling of the PID1 limit-enable command above is the catalog spelling; it 
 - `analog:lock:enable`, `analog:proportional`, `analog:sign`, `analog:slope`
 - `response:modulation:amplitude`, `response:modulation:output`, `response:start`
 
-**Path:** AutoLock can activate selected controllers internally, so denying only direct PID/analog enable writes is insufficient. Analog gain limits do not establish an output envelope; no analog-specific min/max clamp is identified in the bundled catalog. Response measurements have a stimulus output, so starting a measurement can be an output-changing action rather than passive observation.
+**Path:** AutoLock can activate selected controllers internally, so denying only direct PID/analog enable writes is insufficient. Analog gain limits do not establish an output envelope; no analog-specific min/max clamp is identified in the bundled catalog. Response measurements add a stimulus to the selected output, so starting a measurement is not passive observation. The application manual §8.2.3, printed p. 30, explicitly specifies peak-to-peak stimulus amplitude; this verifies the amplitude convention, not the complete physical excursion or its scaling and summation with other sources.
 
 **Review:**
 
@@ -152,7 +152,7 @@ The spelling of the PID1 limit-enable command above is the catalog spelling; it 
 - [ ] Analog control has independently verified bounds and routing before it can be activated.
 - [ ] Measurement start, stimulus amplitude, and stimulus destination are denied unless the stimulus's scaling and combined output effect are verified and bounded.
 
-**Current status:** no state-aware guard for these actions. Exact automatic transitions and response stimulus amplitude semantics require manual/firmware verification.
+**Current status:** no state-aware guard for these actions. Response stimulus **peak-to-peak convention is document-verified**; exact automatic transitions, selected-output/actuator scaling, clipping, and combined physical-output effects still require apparatus-specific verification.
 
 ## Additional checks: supervision, reset, and external access
 

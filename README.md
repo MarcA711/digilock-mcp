@@ -30,7 +30,7 @@ cargo build --release --locked
 ./target/release/digilock-mcp --host 192.168.1.10
 ```
 
-Replace `192.168.1.10` with your Windows host's address. This launch is **read-only by default**. Stdio is the default transport (also selectable with `--transport stdio`). The process speaks MCP on stdin/stdout; it is not an interactive RCI command shell and will wait for an MCP client when launched directly. **Stdout belongs exclusively to MCP protocol traffic**; diagnostics go to stderr. Do not inject banners or redirect logs into stdout.
+Replace `192.168.1.10` with your Windows host's address. This launch is **read-only by default only when the inherited environment does not enable `DIGILOCK_ALLOW_WRITES`**. For an explicitly read-only launch, set `DIGILOCK_ALLOW_WRITES=false` and omit `--allow-writes`. Stdio is the default transport (also selectable with `--transport stdio`). The process speaks MCP on stdin/stdout; it is not an interactive RCI command shell and will wait for an MCP client when launched directly. **Stdout belongs exclusively to MCP protocol traffic**; diagnostics go to stderr. Do not inject banners or redirect logs into stdout.
 
 To permit writes, explicitly restart with either:
 
@@ -69,7 +69,7 @@ For clients using the standard `mcpServers` configuration shape:
 }
 ```
 
-Build first, substitute your Windows host address, and adjust the absolute executable path if the project is elsewhere. The client launches the built binary directly, not `cargo run`. For intentional write access, append `"--allow-writes"` to `args` or add `"env": {"DIGILOCK_ALLOW_WRITES": "true"}` to the server entry. Leave both absent for the default read-only policy.
+Build first, substitute your Windows host address, and adjust the absolute executable path if the project is elsewhere. The client launches the built binary directly, not `cargo run`. For intentional write access, append `"--allow-writes"` to `args` or add `"env": {"DIGILOCK_ALLOW_WRITES": "true"}` to the server entry. For explicit read-only operation, omit `--allow-writes` and set `"env": {"DIGILOCK_ALLOW_WRITES": "false"}`; merely leaving it out of the client entry does not clear a write-enabling value inherited from the client's environment.
 
 ### Network mode (Streamable HTTP)
 
@@ -101,7 +101,7 @@ Here `--listen` identifies the **MCP server**, while `--host` identifies the **W
 ./target/release/digilock-mcp --transport network --listen 0.0.0.0:8080 --allowed-host 192.168.1.20:8080 --host 192.168.1.10
 ```
 
-`--allowed-host` can be repeated. Requests carrying a browser `Origin` header are rejected. **The MCP HTTP endpoint has no authentication or TLS**; Host validation is not authentication. Restrict access with a firewall or authenticated secure proxy/tunnel, and do not expose it to the internet. Logs include complete command values, so treat them as operationally sensitive. Writes still require `--allow-writes` and remain subject to the configured policy.
+`--allowed-host` can be repeated. A bare hostname accepts any port for that host; `host:port` restricts it to the specified port. Malformed authorities, including empty, nonnumeric, or out-of-range explicit ports, are rejected before startup writes. Requests carrying a browser `Origin` header are rejected. **The MCP HTTP endpoint has no authentication or TLS**; Host validation is not authentication. Restrict access with a firewall or authenticated secure proxy/tunnel, and do not expose it to the internet. Logs include complete command values, so treat them as operationally sensitive. Writes still require `--allow-writes` and remain subject to the configured policy.
 
 ## CLI and environment configuration
 
@@ -136,7 +136,9 @@ For an MCP client, append `"--config", "/absolute/path/digilock-config.json"` an
 
 [`digilock-config.example.json`](digilock-config.example.json) is a starting template with **no startup writes**. Its limits and enum labels are illustrative, **not certified safe values for your laser**. Determine actual safe settings and firmware-supported labels before enabling writes.
 
-For the TA pro saturation-spectroscopy setup (Main In photodiode, Scan Out piezo/feedforward, Main Out Mod DC), [`digilock-config.ta-pro-lock-in.json`](digilock-config.ta-pro-lock-in.json) provides a task-specific allowlist with no startup writes. Its [review and optimization guide](docs/ta-pro-lock-in-config.md) explains the proposed limits, fixed routing, firmware-label checks, and live-state prerequisites. **Manual approval is required before enabling writes; this is not a hardware interlock.**
+For the TA pro saturation-spectroscopy setup (Main In photodiode, intended Scan Out piezo/feedforward, Main Out Mod DC), [`digilock-config.ta-pro-lock-in.json`](digilock-config.ta-pro-lock-in.json) is an unapproved, task-specific allowlist with no startup writes. Its [review and optimization guide](docs/ta-pro-lock-in-config.md) describes its actual permissions and live-state prerequisites: **70 allowlisted DUI commands, 25 numeric limits, and no discrete `allowed_values` restrictions**. An allowlisted command without a matching `limits` entry has no operator value constraint; denying routing, clamp-enable, or reset-setting writes does not establish their current state. The offset/amplitude limits are additionally subject to `scan_range`, but activation and other signal contributions are not covered by that rule. **Do not enable writes until the apparatus safety review and intended operations are approved.** This is not a hardware interlock.
+
+[`configs/digilock-config.ta-pro-lock-in_chatty.txt`](configs/digilock-config.ta-pro-lock-in_chatty.txt) is an annotated planning draft, **not a loadable JSON configuration**: it contains comments and inline notes. Do not pass it to `--config`.
 
 A populated configuration has this shape:
 
@@ -172,14 +174,14 @@ A populated configuration has this shape:
 - `limits` do **not** grant allowlist membership. For an otherwise permitted command, optional numeric `min` and `max` are inclusive. Either or both may be supplied. Bounds are finite JSON numbers; `min` must not exceed `max`. Known nonnumeric controls cannot have numeric bounds.
 - `allowed_values` is a nonempty list of exact RCI value strings, suitable for enums, booleans, or other discrete choices. Case and whitespace matter. If combined with numeric bounds, **both** restrictions apply.
 - Constrained numeric strings support a decimal dot or a single decimal comma, plus scientific notation. Comparisons use finite `f64` values; NaN, infinity, whitespace, mixed/repeated separators, units, and other unparseable values are rejected. No thousands separators are supported. The original string is sent unchanged: you must still use the decimal separator expected by Windows/RCI.
-- Limits supplement, rather than replace, the device's ranges and boolean/read-only checks. Other than the explicit scan-envelope rule below, they do not account for interactions between parameters or guarantee physical safety.
+- Limits supplement, rather than replace, the device's ranges and boolean/read-only checks. Structured query/set catalog access checks also recognize ASCII case/space aliases, with or without a configuration file. Other than the explicit scan-envelope rule below, they do not account for interactions between parameters or guarantee physical safety.
 - With a file loaded, **raw assignments follow exactly the same checks as `digilock_set`**. Raw queries remain unaffected by the write policy. Arbitrary raw syntax that cannot be classified as one query or assignment is rejected, even with `--allow-writes`.
 
 Unknown JSON fields, duplicate command/limit keys (including spelling aliases), invalid constraints, and nonstring startup values are rejected rather than silently ignored. Known read-only controls cannot be listed as writable controls or given write limits. `digilock_info` exposes the loaded write policy and startup entry count offline.
 
 ### Combined scan range limit
 
-Optionally add `scan_range` under `write_policy` to constrain the **entire scan envelope**, instead of independently limiting offset and amplitude:
+Optionally add `scan_range` under `write_policy` to constrain the **nominal offset-plus-scan envelope** when either of those controls is assigned, instead of independently limiting offset and amplitude. This is not a bound on the complete physical output:
 
 ```json
 {
@@ -204,7 +206,7 @@ min <= offset:value - scan:amplitude / 2
        offset:value + scan:amplitude / 2 <= max
 ```
 
-Only the specified inequalities are checked for one-sided limits. **Scan amplitude is peak-to-peak**, so the envelope extends by half the amplitude on either side of the offset. The original peak-to-peak value is sent to RCI unchanged.
+Only the specified inequalities are checked for one-sided limits. **Scan amplitude is peak-to-peak**, so the nominal envelope extends by half the amplitude on either side of the offset. This convention and the offset's voltage units are documented in [`Digilock_Manual.pdf`](docs/Digilock_Manual.pdf), §§8.2.1.1–.2, printed p. 18 (PDF p. 22). The original peak-to-peak value is sent to RCI unchanged.
 
 - Before setting `offset:value`, the wrapper queries `scan:amplitude?` on the same DUI endpoint and combines that live amplitude with the proposed offset.
 - Before setting `scan:amplitude`, it queries `offset:value?` and combines that live offset with the proposed amplitude.
@@ -213,7 +215,7 @@ Only the specified inequalities are checked for one-sided limits. **Scan amplitu
 - This applies to `digilock_set`, raw assignments (including command spelling aliases), and startup values on every DUI port. Ordinary queries remain unrestricted by the policy.
 - Each query/check/write holds one per-port session lock and uses **one whole-transaction timeout**. Other requests through this wrapper cannot interleave between the query and write. A blocked write is not retried or silently clamped.
 
-This is a guard on changes to these two controls, **not continuous monitoring or a hardware interlock**. A local DUI action or independent hardware/software update can still change state after the query. Ensure `offset:output` and `scan:output` select the intended common output; constrain their values with `allowed_values` where appropriate. Changing output selectors, enabling a scan, and other signal contributions are not covered by this rule. Existing unsafe state is not automatically corrected.
+This is a guard on changes to these two controls, **not continuous monitoring or a hardware interlock**. A local DUI action or independent hardware/software update can still change state after the query. Ensure `offset:output` and `scan:output` select the intended common output; constrain their values with `allowed_values` where appropriate. Changing output selectors, enabling a scan, and other signal contributions are not covered by this rule. PID correction, LI/PDH modulation, relock, analog feedback, and external Sum In can require separate output budgets. The application manual documents PID limits relative to the initial output offset (§8.2.1.4, printed p. 23), automatic LI/PDH modulation activation during locking (§§8.2.1.7–.8), and optional transfer of PID correction into the output offset when unlocking (§8.2.5.1). Such internal changes do not pass through per-command assignment limits. Existing unsafe state is not automatically corrected; firmware-accepted values and electrical output capabilities are not safe laser operating limits.
 
 ### Startup values
 
@@ -289,7 +291,7 @@ Discover the live commands on DMS:
    {"name":"digilock_query","arguments":{"target":"dms","command":"modules:connection status"}}
    ```
 
-   Interpret the returned lists together to identify the intended module by name and serial number. They remain strings; the wrapper does not join or parse them.
+   Interpret the returned lists together to identify the intended module by name and serial number. They remain strings; the wrapper does not join or parse them. The DMS also lists a **dummy module** for running a DUI without hardware (RCI manual §2); a listed or running DUI alone is not proof of a physical module connection.
 
 2. Inspect the current selection and the firmware's selection range/help:
 
@@ -369,13 +371,13 @@ RCI execution tools return structured fields `target`, `host`, `port`, `command`
 - Arrays, graph data, numeric values, booleans, enum ranges, and help text are **not parsed or normalized**. The manual does not specify a portable graph encoding; consumers must interpret the actual firmware output. Preserve locale-dependent numeric strings rather than assuming JSON floats or a particular delimiter.
 - Validation, transport failures, and recognized RCI `%% Error: ` replies produce an MCP tool error containing an `error` string.
 
-The TCP protocol is prompt-framed using `> ` at the start of a line. A payload line starting with that same sequence is inherently ambiguous. Invalid UTF-8, oversized frames, or detected unexpected data after a prompt are rejected; do not assume arbitrary binary graph payloads are supported.
+The RCI manual (§3.1, printed p. 7) specifies a welcome message followed by the `> ` prompt and commands terminated with **CRLF (ASCII 13, 10)**; the wrapper appends CRLF, so do not include line endings in tool arguments. The wrapper treats `> ` at the start of a line as a frame boundary. A payload line starting with that same sequence is inherently ambiguous. Invalid UTF-8, oversized frames, or detected unexpected data after a prompt are rejected; do not assume arbitrary binary graph payloads are supported.
 
 ## Static catalog versus live firmware
 
-[`docs/commands.json`](docs/commands.json) is compiled into the binary. Its 281 entries (17 DMS and 264 DUI) preserve manual command names, query/set access, data types, and descriptions. `digilock_commands` is an **offline search**, not a query of the connected firmware; changing the file requires rebuilding the binary.
+[`docs/commands.json`](docs/commands.json) is compiled into the binary. Its 281 entries (17 DMS and 264 DUI) transcribe the manual command tables, preserving names, query/set access, data types, and descriptions while joining wrapped text and deduplicating identical rows. `digilock_commands` is an **offline search**, not a query of the connected firmware; changing the file requires rebuilding the binary.
 
-The manual has ambiguities and duplicate entries. For example, DUI `visibility:lock` appears twice with different descriptions. The catalog preserves both rather than inventing corrected command names; command validation uses the first matching entry. Commands with the same name on DMS and DUI are distinguished by `target`.
+The manual has ambiguities and duplicate entries. On printed p. 20, each `spectrum:ch1:hold` and `spectrum:ch2:hold` row is repeated identically; those repeats are deduplicated. DUI `visibility:lock` appears twice with different descriptions, and the catalog preserves both rather than inventing corrected names; single-entry lookup returns the first. Other manual quirks are also retained: `pid1:limit enable` contains a space while `pid2:limit:enable` uses a colon; `response:graph` is listed as query/set while scope and spectrum graphs are query-only; and `pid2:hold:state` has a description referring to PID 1. These transcriptions are not independent verification of firmware behavior. Commands with the same name on DMS and DUI are distinguished by `target`.
 
 Use `digilock_query` with `command: "commandlist"` on the relevant endpoint for **live firmware/software command discovery**, and range/help for actual accepted values. Firmware may differ from the manual. In read-only mode, ordinary queries must be catalogued and marked queryable; range/help queries must reference a catalogued control, including set-only controls. Unknown controls require write opt-in even if their names appear in a live command list. Discovery does not automatically extend the allowlist.
 

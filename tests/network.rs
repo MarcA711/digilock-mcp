@@ -824,6 +824,8 @@ async fn allowed_custom_host_accepts_native_mcp_requests_but_not_hostile_headers
         port.to_string(),
         "--allowed-host".into(),
         "digilock.test".into(),
+        "--allowed-host".into(),
+        "restricted.test:9000".into(),
     ]);
     let address = server.ready().await;
     let allowed = [("Host", "digilock.test")];
@@ -856,7 +858,21 @@ async fn allowed_custom_host_accepts_native_mcp_requests_but_not_hostile_headers
     )
     .await;
     assert_eq!(notification.status, 202);
+    let port_restricted = http(
+        address,
+        "POST",
+        None,
+        &[("Host", "restricted.test:9000")],
+        &initialize_message(),
+        Some(1),
+    )
+    .await;
+    assert_eq!(port_restricted.status, 200);
+    assert!(port_restricted.header("mcp-session-id").is_some());
     for headers in [
+        vec![("Host", "restricted.test")],
+        vec![("Host", "restricted.test:9001")],
+        vec![("Host", "restricted.test:99999")],
         vec![("Host", "digilock.test.evil.example")],
         vec![
             ("Host", "digilock.test"),
@@ -883,6 +899,102 @@ async fn allowed_custom_host_accepts_native_mcp_requests_but_not_hostile_headers
     assert_eq!(tools.status, 200);
     let tools = tools.rpc(2).expect("missing custom-host discovery reply");
     assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 8);
+    assert_no_connection(&listener).await;
+    let lines = server.stop().await;
+    assert!(
+        !lines.iter().any(|line| line.starts_with("RCI ")),
+        "{lines:?}"
+    );
+}
+
+#[tokio::test]
+async fn invalid_allowed_hosts_prevent_startup_writes() {
+    let (dms, dms_port) = listener().await;
+    let (dui, dui_port) = listener().await;
+    let config = ConfigFile::new(json!({
+        "write_policy": {"mode": "denylist"},
+        "initial_values": [
+            {"target": "dms", "command": "selected module", "value": "2"},
+            {"target": "dui", "command": "pid1:proportional", "value": "1"}
+        ]
+    }));
+    for host in [
+        "mcp.test:99999",
+        "mcp.test:abc",
+        "user@mcp.test",
+        "",
+        "https://mcp.test",
+    ] {
+        let mut args = config.args().to_vec();
+        args.extend([
+            "--allow-writes".into(),
+            "--dms-port".into(),
+            dms_port.to_string(),
+            "--dui-port".into(),
+            dui_port.to_string(),
+            "--allowed-host".into(),
+            host.into(),
+        ]);
+        let server = NetworkServer::spawn(&args);
+        let lines = tokio::select! {
+            lines = server.wait_for_exit(false) => lines,
+            connection = dms.accept() => panic!("invalid allowlist opened DMS connection: {connection:?}"),
+            connection = dui.accept() => panic!("invalid allowlist opened DUI connection: {connection:?}"),
+        };
+        assert!(
+            lines.join("\n").contains("invalid --allowed-host"),
+            "{lines:?}"
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.starts_with(READY) || line.starts_with("RCI ")),
+            "{lines:?}"
+        );
+    }
+    assert_no_connection(&dms).await;
+    assert_no_connection(&dui).await;
+}
+
+#[tokio::test]
+async fn hostile_headers_cannot_write_or_delete_an_existing_session() {
+    let (listener, port) = listener().await;
+    let server = NetworkServer::spawn(&[
+        "--allow-writes".into(),
+        "--dui-port".into(),
+        port.to_string(),
+    ]);
+    let address = server.ready().await;
+    let mut mcp = Mcp::connect(address).await;
+    let write = json!({
+        "jsonrpc": "2.0", "id": 99, "method": "tools/call",
+        "params": {"name": "digilock_set", "arguments": {
+            "target": "dui", "command": "pid1:proportional", "value": "1"
+        }}
+    });
+    for method in ["POST", "GET", "DELETE"] {
+        for headers in [
+            vec![("Host", "evil.example")],
+            vec![("Origin", "https://evil.example")],
+            vec![("Origin", "http://localhost")],
+            vec![("Origin", "null")],
+            vec![("Origin", "")],
+            vec![
+                ("Origin", "http://127.0.0.1"),
+                ("Origin", "https://evil.example"),
+            ],
+        ] {
+            let response = http(address, method, Some(&mcp.session), &headers, &write, None).await;
+            assert!(
+                matches!(response.status, 400 | 403 | 421),
+                "{method} {headers:?}: HTTP {}",
+                response.status
+            );
+            assert!(response.header("mcp-session-id").is_none());
+        }
+    }
+    let tools = mcp.request("tools/list", json!({})).await;
+    assert_eq!(tools["tools"].as_array().unwrap().len(), 8);
     assert_no_connection(&listener).await;
     let lines = server.stop().await;
     assert!(

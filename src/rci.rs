@@ -2,8 +2,10 @@
 //!
 //! The protocol has no escaping or length field: a `> ` at the beginning of a
 //! data line is indistinguishable from the prompt. Such payloads cannot be framed
-//! reliably. Embedded `> ` elsewhere is ordinary data. Unexpected bytes received
-//! after a prompt are rejected, rather than saved for the next transaction.
+//! reliably. Embedded `> ` elsewhere is ordinary data. Unexpected bytes observed
+//! after a prompt are rejected, including bytes pending before the next dispatch.
+//! With no request IDs, unsolicited bytes racing with dispatch cannot be reliably
+//! distinguished from a reply; the peer must obey the request/reply protocol.
 //!
 //! A failed or cancelled transaction is never replayed. In particular, a timeout
 //! does not imply that a set command had no effect on the device.
@@ -65,7 +67,12 @@ impl RciClient {
         stream: &mut TcpStream,
         port: u16,
         command: &str,
+        deadline: Instant,
     ) -> Result<RciResponse> {
+        self.check_deadline(port, deadline)?;
+        // Bytes left after a previous prompt must never satisfy a new request.
+        // Check before dispatch (and logging), without replaying a failed command.
+        ensure_idle(stream)?;
         // Log at dispatch, not enqueue: rejected or queued/cancelled commands
         // must not look like hardware operations. A send failure is still uncertain.
         if self.log_commands {
@@ -119,13 +126,22 @@ impl RciClient {
         if let Some((query, _)) = &checked {
             validate_command(query)?;
         }
-        let deadline = Instant::now() + self.timeout;
+        let deadline = Instant::now()
+            .checked_add(self.timeout)
+            .context("RCI timeout is too large for a transaction deadline")?;
         timeout_at(
             deadline,
             self.execute_inner(port, command, checked, deadline),
         )
         .await
         .map_err(|_| self.timeout_error(port))?
+    }
+
+    fn check_deadline(&self, port: u16, deadline: Instant) -> Result<()> {
+        if Instant::now() >= deadline {
+            return Err(self.timeout_error(port));
+        }
+        Ok(())
     }
 
     fn timeout_error(&self, port: u16) -> anyhow::Error {
@@ -155,6 +171,9 @@ impl RciClient {
                 .clone()
         };
         let mut guard = slot.lock().await;
+        // timeout_at polls its future first, even when its deadline has elapsed.
+        // An expired waiter must not dispatch or invalidate an idle session.
+        self.check_deadline(port, deadline)?;
 
         // Keep the stream OUT of the slot until a complete, valid reply arrives.
         // Errors and future cancellation then drop it automatically, even during
@@ -173,13 +192,12 @@ impl RciClient {
         };
 
         if let Some((query, check)) = checked {
-            let response = self.exchange(&mut stream, port, query).await?;
+            let response = self.exchange(&mut stream, port, query, deadline).await?;
+            self.check_deadline(port, deadline)?;
             let result = check_device_error(&response).and_then(|()| check(&response));
             // Tokio timeouts cannot interrupt a synchronous closure. Explicitly
             // reject an overrun before any write, even if the socket is ready.
-            if Instant::now() >= deadline {
-                return Err(self.timeout_error(port));
-            }
+            self.check_deadline(port, deadline)?;
             if let Err(error) = result {
                 // Device/policy errors do not leave any unread reply bytes.
                 *guard = Some(stream);
@@ -187,7 +205,8 @@ impl RciClient {
             }
         }
 
-        let response = self.exchange(&mut stream, port, command).await?;
+        let response = self.exchange(&mut stream, port, command, deadline).await?;
+        self.check_deadline(port, deadline)?;
         // A device error is still a correctly framed transaction. Preserve the
         // connection before returning it as an error to the caller.
         *guard = Some(stream);
@@ -216,6 +235,18 @@ fn validate_command(command: &str) -> Result<()> {
         bail!("RCI command must not contain control characters (including CR, LF, NUL, or DEL)");
     }
     Ok(())
+}
+
+fn ensure_idle(stream: &TcpStream) -> Result<()> {
+    let mut byte = [0];
+    match stream.try_read(&mut byte) {
+        Ok(0) => bail!("RCI connection closed (EOF) before command dispatch"),
+        Ok(_) => {
+            bail!("RCI framing error: unexpected bytes after the prompt before command dispatch")
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(()),
+        Err(error) => Err(error).context("checking RCI connection before command dispatch"),
+    }
 }
 
 async fn exchange(stream: &mut TcpStream, command: &str, limit: usize) -> Result<RciResponse> {
@@ -263,7 +294,9 @@ async fn read_frame(stream: &mut TcpStream, limit: usize) -> Result<String> {
         if bytes.len() == limit {
             bail!("RCI frame exceeded maximum of {limit} incoming bytes before its prompt");
         }
-        let capacity = chunk.len().min(limit - bytes.len());
+        // Read one byte beyond the remaining budget where possible, so a prompt
+        // exactly at the limit cannot hide trailing bytes in the same TCP buffer.
+        let capacity = chunk.len().min((limit - bytes.len()).saturating_add(1));
         let count = stream
             .read(&mut chunk[..capacity])
             .await
@@ -272,6 +305,9 @@ async fn read_frame(stream: &mut TcpStream, limit: usize) -> Result<String> {
             bail!("RCI connection closed (EOF) before a complete prompt");
         }
         bytes.extend_from_slice(&chunk[..count]);
+        if bytes.len() > limit {
+            bail!("RCI frame exceeded maximum of {limit} incoming bytes");
+        }
 
         for index in scan_from..bytes.len().saturating_sub(1) {
             if bytes[index..index + 2] == *b"> " && (index == 0 || bytes[index - 1] == b'\n') {
@@ -1309,6 +1345,156 @@ mod tests {
                 .is_err()
         );
         assert!(client.sessions.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn expired_deadline_preserves_idle_session_without_dispatch() {
+        let (listener, port) = listener().await;
+        let client = client(Duration::ZERO, 1024);
+        let stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        stream.writable().await.unwrap();
+        let (mut peer, _) = listener.accept().await.unwrap();
+        let slot = Arc::new(Mutex::new(Some(stream)));
+        client.sessions.lock().await.insert(port, slot.clone());
+        for checked in [false, true] {
+            let result = if checked {
+                client
+                    .execute_checked(port, "offset?", "gain=1", |_| {
+                        panic!("expired request invoked check")
+                    })
+                    .await
+            } else {
+                client.execute(port, "gain=1").await
+            };
+            assert!(result.unwrap_err().to_string().contains("timed out"));
+            assert!(slot.lock().await.is_some());
+        }
+        assert!(client.disconnect(port).await);
+        let mut bytes = Vec::new();
+        timeout(TEST_TIMEOUT, peer.read_to_end(&mut bytes))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(bytes.is_empty(), "expired requests dispatched: {bytes:?}");
+    }
+
+    #[tokio::test]
+    async fn ready_waiter_after_deadline_does_not_send_or_invalidate_session() {
+        let (listener, port) = listener().await;
+        let client = client(Duration::from_millis(50), 1024);
+        let stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        stream.writable().await.unwrap();
+        let (mut peer, _) = listener.accept().await.unwrap();
+        let slot = Arc::new(Mutex::new(Some(stream)));
+        client.sessions.lock().await.insert(port, slot.clone());
+        let guard = slot.lock().await;
+        let request = client.execute(port, "gain=1");
+        tokio::pin!(request);
+        tokio::select! {
+            result = &mut request => panic!("queued request completed: {result:?}"),
+            _ = sleep(Duration::from_millis(5)) => {}
+        }
+        // Starve the single-thread test runtime, then make the lock AND expired
+        // timer ready together. timeout_at otherwise polls the dispatch first.
+        std::thread::sleep(Duration::from_millis(75));
+        drop(guard);
+        assert!(request.await.unwrap_err().to_string().contains("timed out"));
+        assert!(slot.lock().await.is_some());
+        assert!(client.disconnect(port).await);
+        let mut bytes = Vec::new();
+        timeout(TEST_TIMEOUT, peer.read_to_end(&mut bytes))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(bytes.is_empty(), "expired waiter dispatched: {bytes:?}");
+    }
+
+    #[tokio::test]
+    async fn overflowing_deadline_is_an_error_not_a_panic() {
+        let (listener, port) = listener().await;
+        let client = client(Duration::MAX, 1024);
+        assert!(
+            client
+                .execute(port, "gain=1")
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("too large")
+        );
+        assert!(client.sessions.lock().await.is_empty());
+        assert!(
+            timeout(Duration::from_millis(20), listener.accept())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn exact_limit_does_not_hide_trailing_prompt_data() {
+        let (listener, port) = listener().await;
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let (mut peer, _) = listener.accept().await.unwrap();
+        peer.write_all(b"> x").await.unwrap();
+        let error = read_frame(&mut stream, 2).await.unwrap_err();
+        assert!(error.to_string().contains("maximum of 2"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn pending_bytes_prevent_dispatch_and_invalidate_without_replay() {
+        for checked in [false, true] {
+            let (listener, port) = listener().await;
+            let client = client(TEST_TIMEOUT, 1024);
+            let stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+            let (mut peer, _) = listener.accept().await.unwrap();
+            // Represent bytes arriving after a prior reply's prompt was consumed.
+            peer.write_all(b"offset=stale\r\n> ").await.unwrap();
+            stream.readable().await.unwrap();
+            client
+                .sessions
+                .lock()
+                .await
+                .insert(port, Arc::new(Mutex::new(Some(stream))));
+            let result = if checked {
+                client
+                    .execute_checked(port, "offset?", "gain=1", |_| {
+                        panic!("unsolicited data invoked the safety check")
+                    })
+                    .await
+            } else {
+                client.execute(port, "gain=1").await
+            };
+            assert!(format!("{:#}", result.unwrap_err()).contains("framing error"));
+            assert!(!client.disconnect(port).await);
+            let mut bytes = Vec::new();
+            // Closing with unread unsolicited bytes can reset TCP instead of FIN.
+            if let Err(error) = timeout(TEST_TIMEOUT, peer.read_to_end(&mut bytes))
+                .await
+                .unwrap()
+            {
+                assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset);
+            }
+            assert!(
+                bytes.is_empty(),
+                "desynchronized connection dispatched: {bytes:?}"
+            );
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let (read, mut write) = stream.into_split();
+                write.write_all(b"> ").await.unwrap();
+                command(&mut BufReader::new(read), "next?").await;
+                write.write_all(b"next=fresh\r\n> ").await.unwrap();
+            });
+            assert_eq!(
+                client
+                    .execute(port, "next?")
+                    .await
+                    .unwrap()
+                    .value
+                    .as_deref(),
+                Some("fresh")
+            );
+            timeout(TEST_TIMEOUT, server).await.unwrap().unwrap();
+        }
     }
 
     #[test]

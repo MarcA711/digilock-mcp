@@ -5,7 +5,7 @@
       { "target": "dui", "command": "scan:signal type" },
       { "target": "dui", "command": "scan:frequency" },
       { "target": "dui", "command": "scan:amplitude" },
-      { "target": "dui", "command": "scan:enabble" },
+      { "target": "dui", "command": "scan:enable" },
       { "target": "dui", "command": "offset:value" },
       { "target": "dui", "command": "main in:input offset" },
       { "target": "dui", "command": "li:modulation:frequency set" },

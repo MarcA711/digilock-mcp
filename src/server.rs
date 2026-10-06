@@ -195,20 +195,21 @@ impl DigiLockServer {
 
     fn query_command(&self, target: Target, name: &str, suffix: &str) -> Result<String> {
         catalog::validate_name(name)?;
-        if suffix == "?" {
-            match catalog::lookup(&self.catalog, target, name) {
-                Some(entry) if !entry.query => bail!(
-                    "{name} is set-only according to the manual; use range/help or digilock_set"
-                ),
-                None if !self.config.allow_writes => bail!(
-                    "unknown command {name}; read-only mode permits only documented queries. Use digilock_query with commandlist to discover firmware commands; unknown commands require --allow-writes"
-                ),
-                _ => (),
-            }
-        } else if catalog::lookup(&self.catalog, target, name).is_none()
-            && !self.config.allow_writes
+        let mut known = false;
+        for entry in self
+            .catalog
+            .iter()
+            .filter(|entry| entry.target == target && same_command(&entry.command, name))
         {
-            bail!("unknown command {name}; read-only mode permits only documented controls");
+            known = true;
+            if suffix == "?" && !entry.query {
+                bail!("{name} is set-only according to the manual; use range/help or digilock_set");
+            }
+        }
+        if !known && !self.config.allow_writes {
+            bail!(
+                "unknown command {name}; read-only mode permits only documented controls. Use digilock_query with commandlist to discover firmware commands; unknown commands require --allow-writes"
+            );
         }
         Ok(format!("{name}{suffix}"))
     }
@@ -219,9 +220,7 @@ impl DigiLockServer {
         catalog::validate_name(name)?;
         catalog::validate_value(&request.value)?;
         for entry in self.catalog.iter().filter(|entry| {
-            entry.target == request.control.endpoint.target
-                && (entry.command == *name
-                    || (self.config.operator.is_some() && same_command(&entry.command, name)))
+            entry.target == request.control.endpoint.target && same_command(&entry.command, name)
         }) {
             if !entry.set {
                 bail!("{name} is read-only according to the manual");
@@ -565,6 +564,38 @@ mod tests {
         );
         request.value = "1\r\nprogram:exit=true".into();
         assert!(server.set_command(&request).is_err());
+    }
+
+    #[test]
+    fn catalog_access_checks_apply_to_aliases_without_an_operator_config() {
+        for allow_writes in [false, true] {
+            let server = server(allow_writes);
+            for name in ["echo", "ECHO", "e c h o"] {
+                assert!(server.query_command(Target::Dui, name, "?").is_err());
+                assert!(server.query_command(Target::Dui, name, ".help?").is_ok());
+            }
+            for name in ["scope:graph", "SCOPE:GRAPH", "scope: graph"] {
+                assert!(
+                    server
+                        .set_command(&SetRequest {
+                            control: control(Target::Dui, name),
+                            value: "0".into(),
+                        })
+                        .is_err()
+                );
+            }
+            for name in ["pid1:lock:enable", "PID1:LOCK:ENABLE", "pid1: lock: enable"] {
+                assert!(server.query_command(Target::Dui, name, "?").is_ok());
+                assert!(
+                    server
+                        .set_command(&SetRequest {
+                            control: control(Target::Dui, name),
+                            value: "1".into(),
+                        })
+                        .is_err()
+                );
+            }
+        }
     }
 
     #[test]

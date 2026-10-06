@@ -23,6 +23,7 @@ pub fn load() -> Result<Vec<Command>> {
     Ok(serde_json::from_str(include_str!("../docs/commands.json"))?)
 }
 
+#[cfg(test)]
 pub fn lookup<'a>(catalog: &'a [Command], target: Target, name: &str) -> Option<&'a Command> {
     catalog
         .iter()
@@ -58,7 +59,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn manual_catalog_is_complete_and_names_are_valid() {
+    fn embedded_manual_catalog_counts_and_names_are_valid() {
         let entries = load().unwrap();
         assert_eq!(
             entries.iter().filter(|c| c.target == Target::Dms).count(),
@@ -76,6 +77,73 @@ mod tests {
         assert!(gain.query && gain.set);
         assert!(!lookup(&entries, Target::Dui, "scope:graph").unwrap().set);
         assert!(!lookup(&entries, Target::Dms, "echo").unwrap().query);
+    }
+
+    #[test]
+    fn manual_irregularities_are_not_silently_reinterpreted() {
+        let entries = load().unwrap();
+        // M-038 v05, pp. 15–18: these spellings and access types are intentional
+        // transcriptions, not inferred from analogous controls or graph names.
+        let pid1_limit = lookup(&entries, Target::Dui, "pid1:limit enable").unwrap();
+        assert!(pid1_limit.query && pid1_limit.set);
+        assert_eq!(pid1_limit.data_type, "boolean");
+        assert!(lookup(&entries, Target::Dui, "pid1:limit:enable").is_none());
+        assert!(lookup(&entries, Target::Dui, "pid2:limit:enable").is_some());
+        assert!(lookup(&entries, Target::Dui, "scan:enable").is_some());
+        assert!(lookup(&entries, Target::Dui, "scan:enabble").is_none());
+        for (command, query, set, data_type) in [
+            ("li:modulation:frequency act", true, false, "numeric"),
+            ("li:modulation:frequency set", true, true, "numeric"),
+            ("pdh:modulation:frequency set", true, true, "enum"),
+            ("response:graph", true, true, "2D array"),
+            ("scope:graph", true, false, "2D array"),
+            ("spectrum:graph", true, false, "2D array"),
+        ] {
+            let entry = lookup(&entries, Target::Dui, command).unwrap();
+            assert_eq!((entry.query, entry.set), (query, set), "{command}");
+            assert_eq!(entry.data_type, data_type, "{command}");
+        }
+    }
+
+    #[test]
+    fn catalog_duplicates_preserve_only_the_manual_description_ambiguity() {
+        let entries = load().unwrap();
+        // M-038 v05, p. 20 repeats each FFT hold row verbatim, but gives two
+        // distinct descriptions for visibility:lock. Only the latter is retained.
+        for (index, entry) in entries.iter().enumerate() {
+            for previous in &entries[..index] {
+                if entry.target == previous.target && entry.command == previous.command {
+                    assert_eq!(entry.target, Target::Dui);
+                    assert_eq!(entry.command, "visibility:lock");
+                    assert_eq!(entry.query, previous.query);
+                    assert_eq!(entry.set, previous.set);
+                    assert_eq!(entry.data_type, previous.data_type);
+                    assert_ne!(entry.description, previous.description);
+                }
+            }
+        }
+        let visibility: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry.target == Target::Dui && entry.command == "visibility:lock")
+            .collect();
+        assert_eq!(visibility.len(), 2);
+        assert_eq!(
+            visibility[0].description,
+            "show/hide lock navigation button"
+        );
+        assert_eq!(
+            visibility[1].description,
+            "show/hide advanced AutoLock controls"
+        );
+        for command in ["spectrum:ch1:hold", "spectrum:ch2:hold"] {
+            assert_eq!(
+                entries
+                    .iter()
+                    .filter(|entry| entry.target == Target::Dui && entry.command == command)
+                    .count(),
+                1
+            );
+        }
     }
 
     #[test]

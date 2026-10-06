@@ -724,6 +724,108 @@ async fn config_denylist_and_limits_cannot_be_bypassed_by_raw_aliases_or_ports()
 }
 
 #[tokio::test]
+async fn shipped_preset_rejections_never_connect_for_sets_raw_aliases_or_port_overrides() {
+    let (dms, dms_port) = listener().await;
+    let (dui, dui_port) = listener().await;
+    let (other_dui, other_port) = listener().await;
+    let preset: Value =
+        serde_json::from_str(include_str!("../digilock-config.ta-pro-lock-in.json")).unwrap();
+    let config = ConfigFile::new(preset.clone());
+    let mut args = config.args().to_vec();
+    args.extend([
+        "--allow-writes".into(),
+        "--dms-port".into(),
+        dms_port.to_string(),
+        "--dui-port".into(),
+        dui_port.to_string(),
+    ]);
+    let mut mcp = Mcp::start(&args).await;
+    let info = mcp.call("digilock_info", json!({})).await;
+    let loaded = &info["structuredContent"]["write_policy"];
+    for field in ["mode", "commands"] {
+        assert_eq!(loaded[field], preset["write_policy"][field]);
+    }
+    for field in ["min", "max"] {
+        assert_eq!(
+            loaded["scan_range"][field].as_f64(),
+            preset["write_policy"]["scan_range"][field].as_f64()
+        );
+    }
+    let actual_limits = loaded["limits"].as_array().unwrap();
+    let expected_limits = preset["write_policy"]["limits"].as_array().unwrap();
+    assert_eq!(actual_limits.len(), expected_limits.len());
+    for (actual, expected) in actual_limits.iter().zip(expected_limits) {
+        for field in ["target", "command", "allowed_values"] {
+            assert_eq!(actual[field], expected[field]);
+        }
+        for field in ["min", "max"] {
+            assert_eq!(actual[field].as_f64(), expected[field].as_f64());
+        }
+    }
+
+    let catalog: Vec<Value> = serde_json::from_str(include_str!("../docs/commands.json")).unwrap();
+    let mut rejected = Vec::new();
+    for entry in catalog.iter().filter(|entry| entry["set"] == true) {
+        let target = entry["target"].as_str().unwrap();
+        let name = entry["command"].as_str().unwrap();
+        let listed = preset["write_policy"]["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|key| key["target"] == target && key["command"] == name);
+        if !listed {
+            let value = if entry["data_type"] == "boolean" {
+                "true"
+            } else {
+                "0"
+            };
+            rejected.push((target, name.to_owned(), value.to_owned()));
+        }
+    }
+    for limit in preset["write_policy"]["limits"].as_array().unwrap() {
+        let name = limit["command"].as_str().unwrap();
+        for value in [
+            (limit["min"].as_f64().unwrap() - 1.0).to_string(),
+            (limit["max"].as_f64().unwrap() + 1.0).to_string(),
+            "NaN".into(),
+            "inf".into(),
+            "-inf".into(),
+        ] {
+            rejected.push(("dui", name.to_owned(), value));
+        }
+    }
+    for (target, name, value) in rejected {
+        for alias in [name.clone(), name.replace(' ', "").to_ascii_uppercase()] {
+            let port = if target == "dms" {
+                dms_port
+            } else {
+                other_port
+            };
+            for (tool, arguments) in [
+                (
+                    "digilock_set",
+                    json!({"target": target, "port": port, "command": alias, "value": value}),
+                ),
+                (
+                    "digilock_raw",
+                    json!({"target": target, "port": port, "command": format!("{alias}={value}")}),
+                ),
+            ] {
+                let result = mcp.call(tool, arguments).await;
+                assert_eq!(
+                    result["isError"], true,
+                    "{tool} accepted {target}:{alias}={value}: {result}"
+                );
+            }
+        }
+    }
+    mcp.stop().await;
+    assert_no_connection(&dms).await;
+    assert_no_connection(&dui).await;
+    assert_no_connection(&other_dui).await;
+}
+
+#[tokio::test]
 async fn scan_range_setters_use_fresh_counterparts_and_inclusive_peak_to_peak_amplitude() {
     let (dui, port) = listener().await;
     let config = ConfigFile::new(json!({

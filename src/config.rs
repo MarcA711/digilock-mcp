@@ -57,7 +57,7 @@ mod tests {
     }
 
     #[test]
-    fn ta_pro_configuration_is_allowlisted_with_complete_writable_dui_limits() {
+    fn ta_pro_configuration_has_documented_writable_commands_and_numeric_limits() {
         let config = ta_pro_config();
         let policy = &config.write_policy;
         let catalog = catalog::load().unwrap();
@@ -83,7 +83,16 @@ mod tests {
         }
         let commands: BTreeSet<_> = policy.commands.iter().map(|key| &key.command).collect();
         let limits: BTreeSet<_> = policy.limits.iter().map(|limit| &limit.command).collect();
-        assert_eq!(commands, limits);
+        assert_eq!(commands.len(), 70);
+        assert_eq!(limits.len(), 25);
+        assert!(limits.is_subset(&commands));
+        assert!(
+            policy
+                .limits
+                .iter()
+                .all(|limit| limit.allowed_values.is_none())
+        );
+        assert!(commands.iter().any(|name| name.as_str() == "scan:enable"));
     }
 
     #[test]
@@ -125,8 +134,11 @@ mod tests {
     }
 
     #[test]
-    fn ta_pro_allowed_values_are_accepted_and_matched_exactly() {
-        let policy = ta_pro_config().write_policy;
+    fn example_allowed_values_are_accepted_and_matched_exactly() {
+        let policy =
+            serde_json::from_str::<OperatorConfig>(include_str!("../digilock-config.example.json"))
+                .unwrap()
+                .write_policy;
         for limit in &policy.limits {
             let Some(values) = &limit.allowed_values else {
                 continue;
@@ -159,33 +171,25 @@ mod tests {
     }
 
     #[test]
-    fn ta_pro_routes_outputs_and_inputs_only_to_the_intended_channels() {
+    fn ta_pro_denies_routing_writes_but_does_not_establish_live_routes() {
         let policy = ta_pro_config().write_policy;
-        for (command, expected) in [
-            ("scan:output", "scan out"),
-            ("offset:output", "scan out"),
-            ("pid2:output", "scan out"),
-            ("li:modulation:output", "main out"),
-            ("pid1:output", "main out"),
-            ("li:input", "main in"),
-            ("autolock:input", "li out"),
-            ("pid1:input", "li out"),
-            ("pid2:input", "li out"),
-            ("autolock:spectrum", "main in"),
+        for command in [
+            "scan:output",
+            "offset:output",
+            "pid2:output",
+            "li:modulation:output",
+            "pid1:output",
+            "li:input",
+            "autolock:input",
+            "pid1:input",
+            "pid2:input",
         ] {
-            let limit = policy
-                .limits
-                .iter()
-                .find(|limit| limit.command == command)
-                .unwrap();
-            assert_eq!(limit.allowed_values.as_deref().unwrap(), &[expected]);
             for name in command_aliases(command) {
                 for value in [
                     "scan out", "main out", "aio1 out", "aio2 out", "main in", "li out", "pdh out",
                 ] {
-                    assert_eq!(
-                        policy.check(Target::Dui, &name, value).is_ok(),
-                        value == expected,
+                    assert!(
+                        policy.check(Target::Dui, &name, value).is_err(),
                         "{name}={value}"
                     );
                 }
@@ -194,30 +198,28 @@ mod tests {
     }
 
     #[test]
-    fn ta_pro_guards_cannot_be_disabled_and_relock_cannot_be_enabled() {
+    fn ta_pro_denies_guard_reset_and_relock_writes_for_both_boolean_values() {
         let policy = ta_pro_config().write_policy;
-        for (command, allowed, denied) in [
-            ("pid1:limit enable", "true", "false"),
-            ("pid2:limit:enable", "true", "false"),
-            ("pid1:integral:cutoff:enable", "true", "false"),
-            ("pid1:turnoff reset:manual", "true", "false"),
-            ("pid1:turnoff reset:autolock", "true", "false"),
-            ("pid2:turnoff reset:manual", "true", "false"),
-            ("pid2:turnoff reset:autolock", "true", "false"),
-            ("autolock:relock:enable", "false", "true"),
-            ("pid1:relock:enable", "false", "true"),
-            ("pid2:relock:enable", "false", "true"),
-            ("autolock:controller:analog", "false", "true"),
+        for command in [
+            "pid1:limit enable",
+            "pid2:limit:enable",
+            "pid1:integral:cutoff:enable",
+            "pid1:turnoff reset:manual",
+            "pid1:turnoff reset:autolock",
+            "pid2:turnoff reset:manual",
+            "pid2:turnoff reset:autolock",
+            "autolock:relock:enable",
+            "pid1:relock:enable",
+            "pid2:relock:enable",
+            "autolock:controller:analog",
         ] {
             for name in command_aliases(command) {
-                assert!(
-                    policy.check(Target::Dui, &name, allowed).is_ok(),
-                    "{name}={allowed}"
-                );
-                assert!(
-                    policy.check(Target::Dui, &name, denied).is_err(),
-                    "{name}={denied}"
-                );
+                for value in ["true", "false"] {
+                    assert!(
+                        policy.check(Target::Dui, &name, value).is_err(),
+                        "{name}={value}"
+                    );
+                }
             }
         }
     }
@@ -295,7 +297,8 @@ mod tests {
                 crate::policy::ScanRange::counterpart(&name),
                 Some("scan:amplitude")
             );
-            for offset in ["-0.5", "0", "0.5"] {
+            assert!(policy.check(Target::Dui, &name, "-0.5").is_err());
+            for offset in ["0", "0.5"] {
                 policy.check(Target::Dui, &name, offset).unwrap();
                 range.check_update(&name, offset, "1").unwrap();
             }
@@ -328,6 +331,44 @@ mod tests {
             for invalid in ["NaN", "inf", "-inf"] {
                 assert!(range.check_update(command, invalid, "0").is_err());
                 assert!(range.check_update(command, "0", invalid).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn ta_pro_allowlist_denies_every_unlisted_catalogued_write_and_alias() {
+        let policy = ta_pro_config().write_policy;
+        for entry in catalog::load().unwrap().iter().filter(|entry| entry.set) {
+            let listed = policy.commands.iter().any(|key| {
+                key.target == entry.target
+                    && crate::policy::same_command(&key.command, &entry.command)
+            });
+            if !listed {
+                for name in command_aliases(&entry.command) {
+                    for value in ["true", "false", "0", "main out"] {
+                        assert!(
+                            policy.check(entry.target, &name, value).is_err(),
+                            "{name}={value}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ta_pro_unbounded_allowlisted_values_are_not_mistaken_for_discrete_restrictions() {
+        let policy = ta_pro_config().write_policy;
+        for (name, values) in [
+            ("scan:signal type", vec!["triangle", "sine"]),
+            ("autolock:spectrum", vec!["main in", "li out"]),
+            ("autolock:smart:setpoint", vec!["true", "false"]),
+            ("spectrum:ch1:hold", vec!["true", "false"]),
+        ] {
+            for alias in command_aliases(name) {
+                for value in &values {
+                    policy.check(Target::Dui, &alias, value).unwrap();
+                }
             }
         }
     }

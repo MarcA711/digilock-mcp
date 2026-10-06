@@ -70,6 +70,10 @@ fn main() -> Result<()> {
 }
 
 async fn run(args: Args) -> Result<()> {
+    if args.transport == Transport::Network {
+        // Transport configuration must fail before any startup hardware writes.
+        network::validate_allowed_hosts(&args.allowed_host)?;
+    }
     let server = DigiLockServer::new(Config {
         host: args.host,
         dms_port: args.dms_port,
@@ -165,6 +169,41 @@ mod tests {
         assert!(!args.allow_writes);
         assert!(Args::try_parse_from(["digilock-mcp", "--transport", "invalid"]).is_err());
         assert!(Args::try_parse_from(["digilock-mcp", "--listen", "invalid"]).is_err());
+    }
+
+    #[test]
+    fn allowed_hosts_require_valid_authorities_and_ports() {
+        let valid = [
+            "localhost",
+            "mcp.example.test:9000",
+            "127.0.0.1",
+            "::1",
+            "[::1]",
+            "[::1]:9000",
+            "MCP.EXAMPLE.TEST:65535",
+        ]
+        .map(str::to_owned);
+        network::validate_allowed_hosts(&valid).unwrap();
+        for invalid in [
+            "",
+            " ",
+            "mcp.test:99999",
+            "mcp.test:abc",
+            "mcp.test:",
+            "user@mcp.test",
+            "https://mcp.test",
+            "*.test",
+            "mcp.test/path",
+            "mcp.test?query",
+            "mcp.test#fragment",
+            "mcp.test\r\n",
+            " mcp.test",
+        ] {
+            assert!(
+                network::validate_allowed_hosts(&[invalid.to_owned()]).is_err(),
+                "{invalid:?}"
+            );
+        }
     }
 
     #[test]
