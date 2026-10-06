@@ -99,7 +99,11 @@ Load a JSON file with `--config /absolute/path/digilock-config.json` (or `DIGILO
 
 For an MCP client, append `"--config", "/absolute/path/digilock-config.json"` and, only when intended, `"--allow-writes"` to its server `args`.
 
-[`digilock-config.example.json`](digilock-config.example.json) is a starting template with **no startup writes**. Its limits and enum labels are illustrative, **not certified safe values for your laser**. Determine actual safe settings and firmware-supported labels before enabling writes. A populated configuration has this shape:
+[`digilock-config.example.json`](digilock-config.example.json) is a starting template with **no startup writes**. Its limits and enum labels are illustrative, **not certified safe values for your laser**. Determine actual safe settings and firmware-supported labels before enabling writes.
+
+For the TA pro saturation-spectroscopy setup (Main In photodiode, Scan Out piezo/feedforward, Main Out Mod DC), [`digilock-config.ta-pro-lock-in.json`](digilock-config.ta-pro-lock-in.json) provides a task-specific allowlist with no startup writes. Its [review and optimization guide](docs/ta-pro-lock-in-config.md) explains the proposed limits, fixed routing, firmware-label checks, and live-state prerequisites. **Manual approval is required before enabling writes; this is not a hardware interlock.**
+
+A populated configuration has this shape:
 
 ```json
 {
