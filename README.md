@@ -1,11 +1,11 @@
 # DigiLock MCP wrapper (Rust)
 
-A stdio [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for the **TOPTICA DigiLock 110 Remote Control Interface (RCI)**. It exposes command discovery, queries, range/help requests, and explicitly opt-in writes to MCP clients.
+A stdio or Streamable HTTP [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server for the **TOPTICA DigiLock 110 Remote Control Interface (RCI)**. It exposes command discovery, queries, range/help requests, and explicitly opt-in writes to MCP clients.
 
 The implementation follows the bundled [DigiLock 110 RCI manual](docs/DigiLock-RCI_Manual.pdf), **M-038 version 05, February 2023**. This is a TCP wrapper around the Windows DigiLock software, **not a direct USB driver** or a replacement for that software.
 
 ```text
-MCP client <-- stdio --> digilock-mcp <-- TCP RCI --> Windows DMS / DUI <-- USB --> DigiLock 110
+MCP client <-- stdio or HTTP /mcp --> digilock-mcp <-- TCP RCI --> Windows DMS / DUI <-- USB --> DigiLock 110
 ```
 
 - **DMS** (DigiLock Module Server): discovers and manages modules and starts their interfaces.
@@ -16,7 +16,7 @@ MCP client <-- stdio --> digilock-mcp <-- TCP RCI --> Windows DMS / DUI <-- USB 
 - Rust **1.88 or newer** and Cargo, as required by `Cargo.toml`.
 - A Windows PC running DigiLock software **1.5.4.70 or newer**, with the DigiLock module connected to that PC by USB and the DMS running. The desired DUI must be running before querying its controls; start it in Windows or explicitly opt into DMS writes as described below.
 - TCP reachability from the wrapper to the Windows host's RCI ports. The wrapper can run on a different machine; `--host` identifies the **Windows PC**, not the USB device.
-- An MCP client that supports launching stdio servers.
+- An MCP client that supports launching stdio servers or connecting to Streamable HTTP servers.
 
 The defaults are DMS port `60000` and DUI port `60001`, but discover the actual DUI ports rather than assuming them. Windows firewall rules should allow only the intended trusted clients.
 
@@ -30,7 +30,7 @@ cargo build --release --locked
 ./target/release/digilock-mcp --host 192.168.1.10
 ```
 
-Replace `192.168.1.10` with your Windows host's address. This launch is **read-only by default**. The process speaks MCP on stdin/stdout; it is not an interactive RCI command shell and will wait for an MCP client when launched directly. **Stdout belongs exclusively to MCP protocol traffic**; diagnostics go to stderr. Do not inject banners or redirect logs into stdout.
+Replace `192.168.1.10` with your Windows host's address. This launch is **read-only by default**. Stdio is the default transport (also selectable with `--transport stdio`). The process speaks MCP on stdin/stdout; it is not an interactive RCI command shell and will wait for an MCP client when launched directly. **Stdout belongs exclusively to MCP protocol traffic**; diagnostics go to stderr. Do not inject banners or redirect logs into stdout.
 
 To permit writes, explicitly restart with either:
 
@@ -52,7 +52,7 @@ Run the automated tests with:
 cargo test --locked
 ```
 
-Tests exercise CLI defaults, catalog validation, routing/write guards, and TCP framing, timeouts, cancellation, and connection reuse using **local loopback mock servers**. End-to-end tests also launch the binary over MCP stdio to check tool discovery, routing, write policy, queued/in-flight MCP cancellation, and SIGINT shutdown. They do not test Windows DigiLock software or physical hardware. Loopback TCP binding and subprocess execution must be permitted in the test environment.
+Tests exercise CLI defaults, catalog validation, routing/write guards, and TCP framing, timeouts, cancellation, and connection reuse using **local loopback mock servers**. End-to-end tests launch the binary over MCP stdio and Streamable HTTP to check tool discovery, routing, write policy, queued/in-flight MCP cancellation, console command logging, shared RCI connections across HTTP clients, HTTP Host/Origin validation, and SIGINT shutdown. They do not test Windows DigiLock software or physical hardware. Loopback TCP binding and subprocess execution must be permitted in the test environment.
 
 ## MCP client configuration
 
@@ -71,12 +71,47 @@ For clients using the standard `mcpServers` configuration shape:
 
 Build first, substitute your Windows host address, and adjust the absolute executable path if the project is elsewhere. The client launches the built binary directly, not `cargo run`. For intentional write access, append `"--allow-writes"` to `args` or add `"env": {"DIGILOCK_ALLOW_WRITES": "true"}` to the server entry. Leave both absent for the default read-only policy.
 
+### Network mode (Streamable HTTP)
+
+Run the server independently of your MCP client:
+
+```sh
+./target/release/digilock-mcp --transport network --listen 127.0.0.1:8080 --host 192.168.1.10
+```
+
+Configure a **Streamable HTTP** MCP connection to `http://127.0.0.1:8080/mcp`. Client configuration formats vary; enter that URL in your client's remote-server settings. This is not raw TCP JSON-RPC or the legacy HTTP+SSE transport. Network mode does not read stdin; Ctrl-C stops the listener and active MCP sessions. Multiple MCP clients share the same RCI connections, per-port serialization, and operator write policy. Startup values run once, before any client is served.
+
+**Every RCI command dispatched in network mode is printed to the console on stderr**, including startup assignments, queries, range/help requests, raw commands, and internal safety-check queries. Each line includes the Windows host and actual RCI port:
+
+```text
+RCI 192.168.1.10:60001 >> scan:amplitude?
+```
+
+A log line records a send attempt, not proof that the device executed it successfully. Policy-rejected commands and commands cancelled while queued are not sent or logged. Stdout remains unused in network mode; stdio mode does not enable this command logging and keeps stdout exclusively for MCP.
+
+The default listen address is loopback. To accept clients on another machine, preferably bind to a specific local interface:
+
+```sh
+./target/release/digilock-mcp --transport network --listen 192.168.1.20:8080 --host 192.168.1.10
+```
+
+Here `--listen` identifies the **MCP server**, while `--host` identifies the **Windows RCI server**. HTTP Host validation accepts loopback names and the specific bound IP. For a DNS name or a wildcard bind (`0.0.0.0:8080` / `[::]:8080`), explicitly allow the hostname or IP clients use, preferably including the port:
+
+```sh
+./target/release/digilock-mcp --transport network --listen 0.0.0.0:8080 --allowed-host 192.168.1.20:8080 --host 192.168.1.10
+```
+
+`--allowed-host` can be repeated. Requests carrying a browser `Origin` header are rejected. **The MCP HTTP endpoint has no authentication or TLS**; Host validation is not authentication. Restrict access with a firewall or authenticated secure proxy/tunnel, and do not expose it to the internet. Logs include complete command values, so treat them as operationally sensitive. Writes still require `--allow-writes` and remain subject to the configured policy.
+
 ## CLI and environment configuration
 
 Explicit CLI options take precedence over their corresponding environment variables.
 
 | CLI option | Environment variable | Default | Meaning |
 | --- | --- | --- | --- |
+| `--transport` | `DIGILOCK_TRANSPORT` | `stdio` | MCP transport: `stdio` or `network` (Streamable HTTP at `/mcp`). |
+| `--listen` | `DIGILOCK_LISTEN` | `127.0.0.1:8080` | Network MCP bind address (`IP:port`); ignored in stdio mode. Port `0` chooses a free port, reported on stderr. |
+| `--allowed-host` | None | Loopback names and the specific bound IP | Additional HTTP Host authority accepted in network mode; repeat as needed. |
 | `--host` | `DIGILOCK_HOST` | `127.0.0.1` | Windows host running DMS/DUI; localhost works only when that software is reachable there. |
 | `--dms-port` | `DIGILOCK_DMS_PORT` | `60000` | Module Server RCI port. |
 | `--dui-port` | `DIGILOCK_DUI_PORT` | `60001` | Default DUI RCI port; a tool request can select another discovered DUI port. |
@@ -356,7 +391,7 @@ Read-only raw access permits only catalogued queries and catalogued range/help r
 
 - **Hardware changes require explicit operator opt-in.** `--allow-writes` enables more than parameter tuning: commands can change physical outputs, enable feedback, connect/disconnect modules, or stop Windows applications. Confirm the intended operation and query range/help first. MCP tool annotations are hints, not a substitute for the enforced write guard or operator judgment. Read-only mode is a catalog-based policy, not a hardware safety interlock.
 - **One remote connection per RCI endpoint.** The DMS and each DUI allow only one remote client connection. Close other telnet/automation clients and avoid launching competing wrapper instances against the same endpoint. This wrapper opens connections lazily, keeps at most one session per port, serializes requests on that port, and allows separate ports to progress independently.
-- **Plain, unauthenticated TCP.** This wrapper adds no TLS, credentials, or network authentication to the RCI. Use only on a trusted, isolated network with narrowly scoped firewall access. **Do not expose RCI ports to the internet**, and do not give untrusted MCP clients write access.
+- **Unauthenticated networking.** This wrapper adds no TLS, credentials, or network authentication to the RCI or the network MCP endpoint. Use only on a trusted, isolated network with narrowly scoped firewall access. **Do not expose RCI ports to the internet**, and do not give untrusted MCP clients write access.
 - **Timeouts and transport failures are uncertain outcomes.** The timeout covers the entire RCI transaction, including time queued behind another request. Failed or cancelled in-flight transport transactions close their session; a later request may establish a new connection. The wrapper does **not retry or replay** commands automatically. A timeout, EOF, cancellation, or framing failure does **not prove a change did not execute**. Never automatically retry a write: inspect/query the state and involve the operator before deciding what to do next.
 - **Release a client slot explicitly when needed:**
 
@@ -368,7 +403,8 @@ Read-only raw access permits only catalogued queries and catalogued range/help r
 
 ## Source map
 
-- `src/main.rs`: CLI/environment configuration and stdio MCP startup.
+- `src/main.rs`: CLI/environment configuration, transport selection, and stdio MCP startup.
+- `src/network.rs`: Streamable HTTP MCP listener, Host/Origin validation, shared sessions, and shutdown.
 - `src/server.rs`: tool schemas, endpoint routing, startup writes, and catalog/policy enforcement.
 - `src/config.rs`: strict operator JSON configuration loading.
 - `src/policy.rs`: allowlist/denylist matching and numeric/discrete value limits.
@@ -376,5 +412,6 @@ Read-only raw access permits only catalogued queries and catalogued range/help r
 - `src/rci.rs`: persistent TCP sessions, prompt framing, transaction deadlines, and mock transport tests.
 - `src/catalog.rs`: embedded catalog loading and command/value validation.
 - `tests/stdio.rs`: end-to-end MCP stdio tests with local fake RCI endpoints.
+- `tests/network.rs`: end-to-end Streamable HTTP, command logging, and shared-client tests with local fake RCI endpoints.
 - `docs/DigiLock-RCI_Manual.pdf`: RCI protocol and manual command reference.
 - `docs/Digilock_Manual.pdf` and `docs/DigiLock_Documentation.pdf`: additional bundled DigiLock documentation.

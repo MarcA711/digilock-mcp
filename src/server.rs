@@ -30,6 +30,7 @@ pub struct Config {
     pub timeout: Duration,
     pub max_response_bytes: usize,
     pub allow_writes: bool,
+    pub log_rci_commands: bool,
     pub operator: Option<OperatorConfig>,
 }
 
@@ -106,11 +107,14 @@ impl DigiLockServer {
                 .context("invalid write policy")?;
         }
         let server = Self {
-            client: Arc::new(RciClient::new(
-                config.host.clone(),
-                config.timeout,
-                config.max_response_bytes,
-            )),
+            client: Arc::new(
+                RciClient::new(
+                    config.host.clone(),
+                    config.timeout,
+                    config.max_response_bytes,
+                )
+                .with_command_logging(config.log_rci_commands),
+            ),
             catalog: Arc::new(catalog),
             config,
             tool_router: Self::tool_router(),
@@ -492,6 +496,7 @@ mod tests {
             timeout: Duration::from_secs(1),
             max_response_bytes: 1024,
             allow_writes,
+            log_rci_commands: false,
             operator: None,
         })
         .unwrap()

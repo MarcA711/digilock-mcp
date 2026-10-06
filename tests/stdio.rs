@@ -124,6 +124,8 @@ fn binary(extra: &[String]) -> Command {
         .env_remove("DIGILOCK_DUI_PORT")
         .env_remove("DIGILOCK_TIMEOUT_MS")
         .env_remove("DIGILOCK_MAX_RESPONSE_BYTES")
+        .env_remove("DIGILOCK_TRANSPORT")
+        .env_remove("DIGILOCK_LISTEN")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())

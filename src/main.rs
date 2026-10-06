@@ -1,22 +1,39 @@
 mod catalog;
 mod config;
+mod network;
 mod policy;
 mod rci;
 mod server;
 
-use std::{path::PathBuf, time::Duration};
+use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use rmcp::{ServiceExt, transport::stdio};
+use tokio::net::TcpListener;
 
 use server::{Config, DigiLockServer};
 
-/// MCP stdio server for the TOPTICA DigiLock 110 TCP Remote Control Interface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum Transport {
+    Stdio,
+    Network,
+}
+
+/// MCP server for the TOPTICA DigiLock 110 TCP Remote Control Interface.
 /// The Windows DigiLock Module Server and the desired DUI must already be running.
 #[derive(Debug, Parser)]
 #[command(version, about)]
 struct Args {
+    /// MCP transport: stdio or Streamable HTTP at /mcp.
+    #[arg(long, env = "DIGILOCK_TRANSPORT", value_enum, default_value = "stdio")]
+    transport: Transport,
+    /// Network MCP listen address (separate from the Windows RCI host).
+    #[arg(long, env = "DIGILOCK_LISTEN", default_value = "127.0.0.1:8080")]
+    listen: SocketAddr,
+    /// Additional accepted HTTP Host (repeat for DNS names or wildcard-bind access).
+    #[arg(long)]
+    allowed_host: Vec<String>,
     /// Host running the Windows DigiLock software (not the USB module itself).
     #[arg(long, env = "DIGILOCK_HOST", default_value = "127.0.0.1")]
     host: String,
@@ -60,12 +77,24 @@ async fn run(args: Args) -> Result<()> {
         timeout: Duration::from_millis(args.timeout_ms),
         max_response_bytes: args.max_response_bytes,
         allow_writes: args.allow_writes,
+        log_rci_commands: args.transport == Transport::Network,
         operator: args
             .config
             .as_deref()
             .map(config::OperatorConfig::load)
             .transpose()?,
     })?;
+    // Bind before startup writes so an occupied/invalid listen address cannot
+    // cause hardware changes for a server that will never become available.
+    let listener = if args.transport == Transport::Network {
+        Some(
+            TcpListener::bind(args.listen)
+                .await
+                .context("binding MCP network listener")?,
+        )
+    } else {
+        None
+    };
     tokio::select! {
         result = server.initialize() => result.context("applying startup values; earlier writes may already have taken effect; no commands were replayed")?,
         result = tokio::signal::ctrl_c() => {
@@ -73,6 +102,13 @@ async fn run(args: Args) -> Result<()> {
             anyhow::bail!("startup cancelled; in-flight or earlier writes may already have taken effect");
         }
     }
+    if let Some(listener) = listener {
+        return network::serve(listener, server, args.allowed_host).await;
+    }
+    serve_stdio(server).await
+}
+
+async fn serve_stdio(server: DigiLockServer) -> Result<()> {
     // Stdout belongs exclusively to the MCP transport; diagnostics go to stderr.
     let service = tokio::select! {
         result = server.serve(stdio()) => result.context("starting MCP stdio service")?,
@@ -105,8 +141,30 @@ mod tests {
     fn defaults_are_read_only() {
         let args = Args::try_parse_from(["digilock-mcp"]).unwrap();
         assert!(!args.allow_writes);
+        assert_eq!(args.transport, Transport::Stdio);
+        assert_eq!(args.listen, "127.0.0.1:8080".parse::<SocketAddr>().unwrap());
         assert_eq!(args.dms_port, 60000);
         assert_eq!(args.dui_port, 60001);
+    }
+
+    #[test]
+    fn network_transport_and_listener_are_selectable() {
+        let args = Args::try_parse_from([
+            "digilock-mcp",
+            "--transport",
+            "network",
+            "--listen",
+            "0.0.0.0:9000",
+            "--allowed-host",
+            "mcp.example.test:9000",
+        ])
+        .unwrap();
+        assert_eq!(args.transport, Transport::Network);
+        assert_eq!(args.listen, "0.0.0.0:9000".parse::<SocketAddr>().unwrap());
+        assert_eq!(args.allowed_host, ["mcp.example.test:9000"]);
+        assert!(!args.allow_writes);
+        assert!(Args::try_parse_from(["digilock-mcp", "--transport", "invalid"]).is_err());
+        assert!(Args::try_parse_from(["digilock-mcp", "--listen", "invalid"]).is_err());
     }
 
     #[test]

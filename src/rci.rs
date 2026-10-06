@@ -26,6 +26,7 @@ pub struct RciClient {
     host: String,
     timeout: Duration,
     max_response_bytes: usize,
+    log_commands: bool,
     sessions: Mutex<HashMap<u16, Arc<Mutex<Option<TcpStream>>>>>,
 }
 
@@ -49,8 +50,28 @@ impl RciClient {
             host,
             timeout,
             max_response_bytes,
+            log_commands: false,
             sessions: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub fn with_command_logging(mut self, enabled: bool) -> Self {
+        self.log_commands = enabled;
+        self
+    }
+
+    async fn exchange(
+        &self,
+        stream: &mut TcpStream,
+        port: u16,
+        command: &str,
+    ) -> Result<RciResponse> {
+        // Log at dispatch, not enqueue: rejected or queued/cancelled commands
+        // must not look like hardware operations. A send failure is still uncertain.
+        if self.log_commands {
+            eprintln!("RCI {}:{port} >> {command}", self.host);
+        }
+        exchange(stream, command, self.max_response_bytes).await
     }
 
     pub async fn execute(&self, port: u16, command: &str) -> Result<RciResponse> {
@@ -152,7 +173,7 @@ impl RciClient {
         };
 
         if let Some((query, check)) = checked {
-            let response = exchange(&mut stream, query, self.max_response_bytes).await?;
+            let response = self.exchange(&mut stream, port, query).await?;
             let result = check_device_error(&response).and_then(|()| check(&response));
             // Tokio timeouts cannot interrupt a synchronous closure. Explicitly
             // reject an overrun before any write, even if the socket is ready.
@@ -166,7 +187,7 @@ impl RciClient {
             }
         }
 
-        let response = exchange(&mut stream, command, self.max_response_bytes).await?;
+        let response = self.exchange(&mut stream, port, command).await?;
         // A device error is still a correctly framed transaction. Preserve the
         // connection before returning it as an error to the caller.
         *guard = Some(stream);
