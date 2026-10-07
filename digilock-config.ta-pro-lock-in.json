@@ -11,6 +11,7 @@
       { "target": "dui", "command": "li:modulation:frequency set" },
       { "target": "dui", "command": "li:modulation:amplitude" },
       { "target": "dui", "command": "li:modulation:enable" },
+      { "target": "dui", "command": "li:phase adjust" },
       { "target": "dui", "command": "li:phase shift" },
       { "target": "dui", "command": "li:offset" },
       { "target": "dui", "command": "autolock:enable" },
