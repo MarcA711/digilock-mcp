@@ -1,19 +1,14 @@
 {
-  "name": "Rust GUI",
-  "image": "localhost/rust_gui:latest",
+  "name": "Rust MCP",
+  "image": "localhost/rust_mcp:latest",
   "runArgs": [
-    "--device=/dev/dri",
     "--ipc=host",
     "--userns=keep-id",
     "--group-add=keep-groups",
     "--security-opt=label=disable",
+    "--publish=8080:8080"
   ],
   "mounts": [
     "source=zed-server,target=/home/vscode/.zed_server,type=volume,U=true",
-    "source=${localEnv:XDG_RUNTIME_DIR}/${localEnv:WAYLAND_DISPLAY},target=${localEnv:XDG_RUNTIME_DIR}/${localEnv:WAYLAND_DISPLAY},type=bind",
   ],
-  "containerEnv": {
-    "WAYLAND_DISPLAY": "${localEnv:WAYLAND_DISPLAY}",
-    "XDG_RUNTIME_DIR": "${localEnv:XDG_RUNTIME_DIR}",
-  },
 }
