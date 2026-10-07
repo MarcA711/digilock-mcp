@@ -4,7 +4,7 @@ This project is a Rust MCP (Model Context Protocol) wrapper for the TOPTICA Digi
 
 # Python tools
 
-Use the Python 3 environment in `.venv/`, preferably by invoking `.venv/bin/python3` directly rather than system Python. It provides tools for inspecting and extracting PDF documentation, NumPy/SciPy for numerical calculations and mcp including the cli to connect to an MCP server.
+Use the Python 3 environment in `/opt/venv/`, preferably by invoking `/opt/venv/bin/python3` directly rather than system Python. It provides tools for inspecting and extracting PDF documentation, NumPy/SciPy for numerical calculations and mcp including the cli to connect to an MCP server.
 
 # Documentation and safety
 
